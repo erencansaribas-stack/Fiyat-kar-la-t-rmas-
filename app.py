@@ -70,9 +70,10 @@ def gemini_urun_tani(image):
         buffered.getvalue()
     ).decode("utf-8")
 
+    # Düzeltilen doğru URL modeli
     url = (
         "https://generativelanguage.googleapis.com/"
-        "v1beta/models/gemini-1.5-flash:generateContent"
+        "v1beta/models/gemini-3.8-flash:generateContent"
     )
 
     data = {
@@ -85,7 +86,7 @@ def gemini_urun_tani(image):
                             "sadece kutu üzerindeki yazıları harfi harfine okuyarak belirle. "
                             "Asla yorum yapma veya kategori uydurma. "
                             "Sadece Google Shopping üzerinde aratılacak en doğru ve net ürün adını tek bir satır halinde yaz. "
-                            "Örneğin: 'Ceel Retinal Shot' gibi."
+                            "Örneğin: 'Ceel Retinal Shot 30 ml' gibi."
                         )
                     },
                     {
