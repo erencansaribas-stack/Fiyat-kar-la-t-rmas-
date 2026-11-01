@@ -8,7 +8,7 @@ st.set_page_config(page_title="Fiyat Karşılaştırma", page_icon="📸")
 st.title("📸 Görselden Fiyat Karşılaştırma Asistanı")
 st.write("Ürünün fotoğrafını yükle, yapay zeka tanısın ve internetteki en güncel fiyatları karşılaştırsın.")
 
-# Kullanıcının kendi ismini gireceği alan
+# Kullanıcı Adı Girişi
 kullanici_adi = st.text_input("Adın nedir?", value="Eren Can")
 
 if kullanici_adi:
@@ -33,7 +33,7 @@ if yuklenen_foto is not None:
     if st.button("Ürünü Tanı ve Fiyatları Ara"):
         with st.spinner("Yapay zeka ürünü inceliyor ve fiyatları topluyor..."):
             try:
-                # Gemini ile ürün tespiti
+                # Gemini ile ürün tespiti (Resmi ve kararlı yöntem)
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 response = model.generate_content(["Bu fotoğraftaki ürünün tam marka ve modelini sadece ürün adı olarak tek cümleyle yaz.", image])
                 urun_adi = response.text.strip()
