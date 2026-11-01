@@ -4,15 +4,20 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import json
+import base64
+import io
 
 from PIL import Image
-from google import genai
 
 
+# ---------------------------------
 # SAYFA AYARLARI
+# ---------------------------------
+
 st.set_page_config(
-    page_title="Fiyat Karşılaştırma",
-    page_icon="📸"
+    page_title="Görselden Fiyat Karşılaştırma",
+    page_icon="📸",
+    layout="centered"
 )
 
 st.title("📸 Görselden Fiyat Karşılaştırma Asistanı")
@@ -23,7 +28,10 @@ st.write(
 )
 
 
+# ---------------------------------
 # KULLANICI
+# ---------------------------------
+
 kullanici_adi = st.text_input(
     "Adın nedir?",
     value="Eren Can"
@@ -33,24 +41,185 @@ if kullanici_adi:
     st.subheader(f"👋 Hoş geldin, {kullanici_adi}!")
 
 
+# ---------------------------------
 # API ANAHTARLARI
+# ---------------------------------
+
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
 
 except Exception:
     st.error(
-        "API anahtarları bulunamadı. "
-        "Lütfen Streamlit Secrets ayarlarını kontrol et."
+        "API anahtarları bulunamadı! "
+        "Streamlit Secrets ayarlarını kontrol et."
     )
     st.stop()
 
 
-# GEMINI İSTEMCİSİ
-client = genai.Client(api_key=GEMINI_API_KEY)
+# ---------------------------------
+# GEMINI ÜRÜN TANIMA FONKSİYONU
+# ---------------------------------
+
+def gemini_urun_tani(image):
+
+    buffered = io.BytesIO()
+
+    image.save(buffered, format="JPEG", quality=90)
+
+    img_str = base64.b64encode(
+        buffered.getvalue()
+    ).decode("utf-8")
+
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        "v1beta/models/gemini-3.8-flash:generateContent"
+    )
+
+    data = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": (
+                            "Bu fotoğraftaki ürünü tanımla. "
+                            "Markasını, modelini ve ürün türünü "
+                            "belirlemeye çalış. "
+                            "Emin olmadığın marka veya modeli uydurma. "
+                            "Google Shopping üzerinde aranabilecek "
+                            "ürün adını tek satır olarak yaz."
+                        )
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": img_str
+                        }
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 150
+        }
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY
+        },
+        method="POST"
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            req,
+            timeout=60
+        ) as response:
+
+            sonuc = json.loads(
+                response.read().decode("utf-8")
+            )
+
+        urun_adi = (
+            sonuc["candidates"][0]
+            ["content"]["parts"][0]["text"]
+            .strip()
+        )
+
+        if not urun_adi:
+            raise ValueError("Gemini boş ürün adı döndürdü.")
+
+        return urun_adi
+
+    except urllib.error.HTTPError as ex:
+
+        detay = ex.read().decode(
+            "utf-8",
+            errors="replace"
+        )
+
+        raise Exception(
+            f"Gemini HTTP {ex.code}: {detay}"
+        )
+
+    except (KeyError, IndexError, TypeError):
+
+        raise Exception(
+            "Gemini yanıtı beklenen formatta değil. "
+            "Modelin yanıtını kontrol et."
+        )
 
 
+# ---------------------------------
+# SERPAPI FİYAT ARAMA FONKSİYONU
+# ---------------------------------
+
+def fiyatlari_ara(urun_adi):
+
+    params = urllib.parse.urlencode({
+
+        "engine": "google_shopping",
+
+        "q": urun_adi,
+
+        "hl": "tr",
+
+        "gl": "tr",
+
+        "api_key": SERPAPI_KEY
+
+    })
+
+    search_url = (
+        "https://serpapi.com/search.json?"
+        + params
+    )
+
+    req = urllib.request.Request(
+        search_url,
+        headers={
+            "User-Agent": "Mozilla/5.0"
+        }
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            req,
+            timeout=45
+        ) as response:
+
+            sonuc = json.loads(
+                response.read().decode("utf-8")
+            )
+
+        if sonuc.get("error"):
+            raise Exception(sonuc["error"])
+
+        return sonuc.get("shopping_results", [])
+
+    except urllib.error.HTTPError as ex:
+
+        detay = ex.read().decode(
+            "utf-8",
+            errors="replace"
+        )
+
+        raise Exception(
+            f"SerpApi HTTP {ex.code}: {detay}"
+        )
+
+
+# ---------------------------------
 # FOTOĞRAF YÜKLEME
+# ---------------------------------
+
 yuklenen_foto = st.file_uploader(
     "Ürün fotoğrafı seç",
     type=["jpg", "jpeg", "png"]
@@ -60,7 +229,10 @@ yuklenen_foto = st.file_uploader(
 if yuklenen_foto is not None:
 
     try:
-        image = Image.open(yuklenen_foto).convert("RGB")
+
+        image = Image.open(
+            yuklenen_foto
+        ).convert("RGB")
 
         st.image(
             image,
@@ -69,150 +241,168 @@ if yuklenen_foto is not None:
         )
 
     except Exception as ex:
+
         st.error(f"Fotoğraf okunamadı: {ex}")
         st.stop()
 
 
+    # ---------------------------------
+    # ARAMA BUTONU
+    # ---------------------------------
+
     if st.button(
-        "Ürünü Tanı ve Fiyatları Ara",
-        type="primary"
+        "🔍 Ürünü Tanı ve Fiyatları Ara",
+        type="primary",
+        use_container_width=True
     ):
 
-        # 1. GEMINI İLE ÜRÜN TANIMA
-        with st.spinner("Yapay zeka ürünü inceliyor..."):
+        # GEMINI ANALİZİ
+
+        with st.spinner(
+            "Yapay zeka ürünü tanıyor..."
+        ):
 
             try:
-                response = client.models.generate_content(
-                    model="gemini-3.8-flash",
-                    contents=[
-                        """
-                        Bu fotoğraftaki ürünü analiz et.
 
-                        Mümkünse:
-                        - Marka
-                        - Model
-                        - Ürün türü
-
-                        bilgilerini belirle.
-
-                        Emin olmadığın marka veya modeli uydurma.
-                        Sadece ürünün arama yapılabilecek adını yaz.
-                        """,
-                        image
-                    ]
-                )
-
-                urun_adi = response.text.strip()
-
-                if not urun_adi:
-                    st.error("Gemini ürün adını belirleyemedi.")
-                    st.stop()
+                urun_adi = gemini_urun_tani(image)
 
                 st.success(
                     f"🔍 Algılanan Ürün: {urun_adi}"
                 )
 
             except Exception as ex:
-                st.error(f"Gemini API hatası: {ex}")
+
+                st.error(
+                    f"Gemini analiz hatası: {ex}"
+                )
+
                 st.stop()
 
 
-        # 2. SERPAPI İLE GOOGLE SHOPPING ARAMASI
-        with st.spinner("Google Shopping fiyatları aranıyor..."):
+        # SERPAPI ARAMASI
+
+        with st.spinner(
+            "Google Shopping fiyatları aranıyor..."
+        ):
 
             try:
-                params = urllib.parse.urlencode({
-                    "engine": "google_shopping",
-                    "q": urun_adi,
-                    "hl": "tr",
-                    "gl": "tr",
-                    "api_key": SERPAPI_KEY
-                })
 
-                search_url = (
-                    "https://serpapi.com/search.json?"
-                    + params
-                )
-
-                req = urllib.request.Request(
-                    search_url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0"
-                    }
-                )
-
-                with urllib.request.urlopen(
-                    req,
-                    timeout=30
-                ) as search_res:
-
-                    search_data = json.loads(
-                        search_res.read().decode("utf-8")
-                    )
-
-                if search_data.get("error"):
-                    st.error(
-                        f"SerpApi hatası: {search_data['error']}"
-                    )
-                    st.stop()
-
-                shopping_results = search_data.get(
-                    "shopping_results", []
+                shopping_results = fiyatlari_ara(
+                    urun_adi
                 )
 
             except Exception as ex:
-                st.error(f"Fiyat arama hatası: {ex}")
+
+                st.error(
+                    f"Fiyat arama hatası: {ex}"
+                )
+
                 st.stop()
 
 
-        # 3. SONUÇLARI GÖSTER
+        # ---------------------------------
+        # SONUÇLARI GÖSTER
+        # ---------------------------------
+
         if shopping_results:
 
-            st.subheader("🛒 Bulunan Fiyatlar ve Satıcılar")
+            st.subheader(
+                "🛒 Bulunan Fiyatlar ve Satıcılar"
+            )
 
             fiyatlar = []
 
             for item in shopping_results[:10]:
 
-                satici = item.get("source", "Satıcı belirtilmemiş")
-                fiyat = item.get("price", "Fiyat belirtilmemiş")
-                baslik = item.get("title", "Ürün")
+                satici = item.get(
+                    "source",
+                    "Satıcı belirtilmemiş"
+                )
+
+                fiyat = item.get(
+                    "price",
+                    "Fiyat belirtilmemiş"
+                )
+
+                baslik = item.get(
+                    "title",
+                    "Ürün"
+                )
+
                 link = item.get("link")
-                extracted_price = item.get("extracted_price")
 
-                st.markdown(f"**{satici}**")
+                extracted_price = item.get(
+                    "extracted_price"
+                )
 
-                st.write(f"Ürün: {baslik}")
-                st.write(f"Fiyat: {fiyat}")
+                with st.container(border=True):
 
-                if link:
                     st.markdown(
-                        f"[Ürünü incele]({link})"
+                        f"**🏪 {satici}**"
                     )
 
+                    st.write(
+                        f"📦 {baslik}"
+                    )
+
+                    st.write(
+                        f"💰 {fiyat}"
+                    )
+
+                    if link:
+
+                        st.link_button(
+                            "Ürünü incele",
+                            link,
+                            use_container_width=True
+                        )
+
                 if extracted_price is not None:
+
                     try:
-                        fiyatlar.append(float(extracted_price))
+
+                        fiyatlar.append(
+                            float(extracted_price)
+                        )
+
                     except (ValueError, TypeError):
                         pass
 
-                st.divider()
 
+            # ---------------------------------
+            # ORTALAMA FİYAT
+            # ---------------------------------
 
-            # 4. ORTALAMA FİYAT
             if fiyatlar:
 
-                ortalama = sum(fiyatlar) / len(fiyatlar)
+                ortalama = (
+                    sum(fiyatlar) / len(fiyatlar)
+                )
 
-                st.success(
-                    "📊 Sonuçlardaki sayısal fiyat ortalaması: "
-                    f"{ortalama:.2f}"
+                st.subheader(
+                    "📊 Fiyat Analizi"
+                )
+
+                st.metric(
+                    "Bulunan fiyatların sayısal ortalaması",
+                    f"{ortalama:,.2f}"
                 )
 
                 st.caption(
-                    "Bu ortalama, bulunan sonuçların sayısal "
-                    "fiyatlarından hesaplanır. Farklı para "
-                    "birimleri varsa doğrudan karşılaştırılmamalıdır."
+                    "Ortalama, sayısal fiyat alanlarından "
+                    "hesaplanmıştır. Farklı para birimleri "
+                    "varsa doğrudan karşılaştırılamaz."
+                )
+
+                st.write(
+                    f"Karşılaştırılan fiyat sayısı: {len(fiyatlar)}"
+                )
+
+            else:
+
+                st.warning(
+                    "Ürünler bulundu ancak sayısal fiyat "
+                    "bilgisi alınamadı."
                 )
 
         else:
@@ -221,3 +411,14 @@ if yuklenen_foto is not None:
                 "Bu ürün için Google Shopping üzerinde "
                 "satış sonucu bulunamadı."
             )
+
+
+# ---------------------------------
+# ALT BİLGİ
+# ---------------------------------
+
+st.divider()
+
+st.caption(
+    "Görselden Fiyat Karşılaştırma Asistanı"
+)
