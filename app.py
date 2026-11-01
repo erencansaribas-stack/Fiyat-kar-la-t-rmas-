@@ -10,13 +10,11 @@ st.set_page_config(page_title="Fiyat Karşılaştırma", page_icon="📸")
 st.title("📸 Görselden Fiyat Karşılaştırma Asistanı")
 st.write("Ürünün fotoğrafını yükle, yapay zeka tanısın ve internetteki en güncel fiyatları karşılaştırsın.")
 
-# Kullanıcı Adı Girişi
 kullanici_adi = st.text_input("Adın nedir?", value="Eren Can")
 
 if kullanici_adi:
     st.subheader(f"👋 Hoş geldin, {kullanici_adi}!")
 
-# API Anahtarlarını Al
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
@@ -33,13 +31,11 @@ if yuklenen_foto is not None:
     if st.button("Ürünü Tanı ve Fiyatları Ara"):
         with st.spinner("Yapay zeka ürünü inceliyor ve fiyatları topluyor..."):
             try:
-                # Fotoğrafı Base64 formatına çevir
                 buffered = io.BytesIO()
                 image.save(buffered, format="JPEG")
                 img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
                 
-                # Gemini API Doğru URL Adresi
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+                url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
                 headers = {'Content-Type': 'application/json'}
                 data = {
                     "contents": [{
@@ -57,7 +53,6 @@ if yuklenen_foto is not None:
                 
                 st.info(f"🔍 Algılanan Ürün: **{urun_adi}**")
                 
-                # SerpApi ile fiyat arama
                 params = urllib.parse.urlencode({
                     "engine": "google_shopping",
                     "q": urun_adi,
