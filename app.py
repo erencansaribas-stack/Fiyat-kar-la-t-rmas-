@@ -1,4 +1,3 @@
-
 import streamlit as st
 import urllib.request
 import urllib.parse
@@ -73,7 +72,7 @@ def gemini_urun_tani(image):
 
     url = (
         "https://generativelanguage.googleapis.com/"
-        "v1beta/models/gemini-3.8-flash:generateContent"
+        "v1beta/models/gemini-1.5-flash:generateContent"
     )
 
     data = {
@@ -82,12 +81,11 @@ def gemini_urun_tani(image):
                 "parts": [
                     {
                         "text": (
-                            "Bu fotoğraftaki ürünü tanımla. "
-                            "Markasını, modelini ve ürün türünü "
-                            "belirlemeye çalış. "
-                            "Emin olmadığın marka veya modeli uydurma. "
-                            "Google Shopping üzerinde aranabilecek "
-                            "ürün adını tek satır olarak yaz."
+                            "Bu fotoğrafta el ile tutulan veya odaklanılan ana ürünün tam marka adını ve modelini, "
+                            "sadece kutu üzerindeki yazıları harfi harfine okuyarak belirle. "
+                            "Asla yorum yapma veya kategori uydurma. "
+                            "Sadece Google Shopping üzerinde aratılacak en doğru ve net ürün adını tek bir satır halinde yaz. "
+                            "Örneğin: 'Ceel Retinal Shot' gibi."
                         )
                     },
                     {
@@ -100,7 +98,7 @@ def gemini_urun_tani(image):
             }
         ],
         "generationConfig": {
-            "temperature": 0.2,
+            "temperature": 0.1,
             "maxOutputTokens": 150
         }
     }
