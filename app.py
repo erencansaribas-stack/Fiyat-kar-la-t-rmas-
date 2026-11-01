@@ -38,7 +38,7 @@ if yuklenen_foto is not None:
                 image.save(buffered, format="JPEG")
                 img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
                 
-                # Gemini API Doğru Endpoint ve Model Yolu
+                # Gemini API Doğru URL Adresi
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
                 headers = {'Content-Type': 'application/json'}
                 data = {
