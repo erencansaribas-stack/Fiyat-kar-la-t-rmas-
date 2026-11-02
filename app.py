@@ -17,7 +17,7 @@ from PIL import Image, ImageOps
 # ============================================================
 st.set_page_config(
     page_title="Akıllı Alışveriş Asistanı",
-    page_icon="🛍️",
+    page_icon="🤯",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
