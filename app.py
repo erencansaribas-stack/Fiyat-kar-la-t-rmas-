@@ -5,6 +5,7 @@ import io
 import time
 import re
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import random
 import html
 from urllib.request import Request, urlopen
@@ -177,6 +178,9 @@ html, body, [class*="css"], .stApp {
     padding: 3px 10px; border-radius: 999px;
 }
 
+.card .match { font-weight: 700; }
+.card .match.ayni { color: var(--brand); }
+.card .match.benzer { color: #9A6B00; }
 .card .old { color: var(--muted); font-size: .8rem; font-weight: 500; margin-left: 8px; }
 .card .meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: .78rem; margin-top: 2px; }
 .stButton button[kind="secondary"], [data-testid="stBaseButton-secondary"] {
@@ -457,6 +461,92 @@ def lens_ara(foto_url, api_key):
     return en_iyi
 
 
+def _gemini_metin(parcalar, api_key, maks=256):
+    """Verilen parçalarla (metin + görseller) Gemini'ye JSON yanıt için sorar."""
+    son_hata, son_kod = "", None
+    for model_adi in mevcut_modeller(api_key)[:3]:
+        cfg = {"temperature": 0, "maxOutputTokens": maks,
+               "responseMimeType": "application/json"}
+        if model_adi.startswith("gemini-2.5"):
+            cfg["thinkingConfig"] = {"thinkingBudget": 0}
+        url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model_adi}:generateContent")
+        for deneme in range(2):
+            data = {"contents": [{"parts": parcalar}], "generationConfig": cfg}
+            req = Request(url, data=json.dumps(data).encode("utf-8"),
+                          headers={"Content-Type": "application/json",
+                                   "x-goog-api-key": api_key}, method="POST")
+            try:
+                with urlopen(req, timeout=40) as r:
+                    sonuc = json.loads(r.read().decode("utf-8"))
+                return "".join(p.get("text", "") for p in
+                               sonuc["candidates"][0]["content"]["parts"])
+            except HTTPError as ex:
+                son_kod, son_hata = ex.code, _hata_mesaji(ex)
+                if ex.code == 400 and "thinkingConfig" in cfg:
+                    cfg.pop("thinkingConfig")
+                    continue
+                if ex.code in GECICI_HATALAR:
+                    time.sleep(1.5 * (deneme + 1))
+                    continue
+                break
+            except (URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as ex:
+                son_hata = str(ex)
+                break
+    raise Exception(f"Gemini yanıt vermedi ({son_kod or 'bağlantı'}): {son_hata}")
+
+
+def kucuk_resim_indir(url):
+    """Aday küçük resmini indirir; (mime, base64) döner, olmazsa None."""
+    try:
+        if url.startswith("data:image"):
+            bas, veri = url.split(",", 1)
+            return bas[5:].split(";")[0], veri
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=10) as r:
+            tip = r.headers.get_content_type()
+            veri = r.read(400_000)
+        if tip not in ("image/jpeg", "image/png", "image/webp"):
+            return None
+        return tip, base64.b64encode(veri).decode("utf-8")
+    except Exception:
+        return None
+
+
+def eslestir(image, adaylar, api_key):
+    """Her adayı fotoğraftaki ürünle Gemini'ye karşılaştırtır; 'eslesme' (0-10) yazar."""
+    foto = image.copy()
+    foto.thumbnail((640, 640))
+    buf = io.BytesIO()
+    foto.save(buf, format="JPEG", quality=75)
+    parcalar = [
+        {"text": "Birinci görsel kullanıcının aradığı ÜRÜN. Sonraki görseller numaralı "
+                 "adaylar. Her aday için, birinci görseldeki ürünün AYNISI olup olmadığını "
+                 "0-10 puanla (aynı model, tasarım, renk ve desen = 9-10). Aynı marka veya "
+                 "aynı türde olması yetmez; model, desen veya renk farklıysa düşük puan ver. "
+                 "Sadece aday sayısı kadar tam sayıdan oluşan bir JSON dizisi döndür, örn: [9,2,0]"},
+        {"inline_data": {"mime_type": "image/jpeg",
+                         "data": base64.b64encode(buf.getvalue()).decode("utf-8")}},
+    ]
+    with ThreadPoolExecutor(8) as ex:
+        resimler = list(ex.map(kucuk_resim_indir,
+                               [a.get("thumbnail") or "" for a in adaylar]))
+    kullanilan = []
+    for a, r in zip(adaylar, resimler):
+        if r:
+            kullanilan.append(a)
+            parcalar += [{"text": f"Aday {len(kullanilan)}:"},
+                         {"inline_data": {"mime_type": r[0], "data": r[1]}}]
+    if not kullanilan:
+        raise Exception("Aday resimleri indirilemedi.")
+    eslesen = re.search(r"\[[\d,\s]*\]", _gemini_metin(parcalar, api_key))
+    if not eslesen:
+        raise Exception("Karşılaştırma sonucu okunamadı.")
+    for a, puan in zip(kullanilan, json.loads(eslesen.group(0))):
+        a["eslesme"] = max(0, min(10, int(puan)))
+    return adaylar
+
+
 def sorgu_adaylari(ad):
     """Uzun ürün adından, sonuç çıkana dek denenecek daha kısa ifadeler üretir."""
     temiz = re.sub(r"%\s?\d+(?:[.,]\d+)?|\(.*?\)", " ", ad)
@@ -573,6 +663,10 @@ def urun_karti(item, en_ucuz):
     eski_html = f'<s class="old">{html.escape(str(eski))}</s>' if eski else ""
 
     meta = []
+    es = item.get("eslesme")
+    if es is not None:
+        meta.append('<span class="match ayni">Aynı ürün</span>' if es >= 7
+                    else '<span class="match benzer">Benzer ürün</span>')
     puan, yorum = item.get("rating"), item.get("reviews")
     if puan:
         sayi = f" ({int(yorum):,})".replace(",", ".") if isinstance(yorum, (int, float)) and yorum else ""
@@ -659,6 +753,12 @@ if kaynak is not None:
                     st.write("Google Lens eşleşen ürünleri arıyor…")
                     bulunan = lens_ara(foto_url, SERPAPI_KEY)
                     if bulunan:
+                        bulunan = bulunan[:12]
+                        st.write("Sonuçlar fotoğrafla karşılaştırılıyor…")
+                        try:
+                            eslestir(image, bulunan, GEMINI_API_KEY)
+                        except Exception as ex:
+                            st.warning(f"Eşleşme doğrulanamadı: {ex}")
                         st.session_state["sonuclar"] = bulunan
                         st.session_state["mod"] = "gorsel"
                         st.session_state.pop("urun_adi", None)
@@ -735,9 +835,21 @@ if sonuclar is not None:
         if elenen:
             st.caption(f"{elenen} alakasız sonuç (kılıf, aksesuar vb.) gizlendi.")
         if mod == "gorsel":
-            st.caption("Fotoğrafa görsel olarak en çok benzeyen ürünler. "
-                       "Aynı ürünü küçük resimden doğrula.")
-            secenekler = ["Benzerlik", "En ucuz", "En yüksek puan"]
+            dogrulanan = [r for r in sonuclar if r.get("eslesme") is not None]
+            if dogrulanan:
+                ayni = [r for r in dogrulanan if r["eslesme"] >= 7]
+                if st.checkbox("Benzer ürünleri de göster", value=False):
+                    sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])
+                    st.caption("Fotoğraftaki ürünün aynısı ve benzerleri.")
+                elif ayni:
+                    sonuclar = sorted(ayni, key=lambda r: -r["eslesme"])
+                    st.caption(f"Fotoğraftaki ürünün aynısı olarak doğrulanan {len(ayni)} sonuç.")
+                else:
+                    sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])[:3]
+                    st.caption("Birebir aynısı bulunamadı, en yakın ürünler gösteriliyor.")
+            else:
+                st.caption("Eşleşme doğrulanamadı, görsel olarak benzer ürünler gösteriliyor.")
+            secenekler = ["En ucuz", "Benzerlik", "En yüksek puan"]
         else:
             st.caption(f"Aranan: {st.session_state.get('aranan', '')}")
             secenekler = ["En ucuz", "En yüksek puan"]
@@ -775,3 +887,4 @@ st.markdown(
     "Görselden fiyat karşılaştırma asistanı</p>",
     unsafe_allow_html=True,
 )
+
