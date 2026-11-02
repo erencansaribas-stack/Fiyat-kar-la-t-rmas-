@@ -10,7 +10,7 @@ import html
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
-from PIL import Image
+from PIL import Image, ImageOps
 
 # ---------------------------------
 # SAYFA AYARLARI
@@ -210,6 +210,11 @@ except Exception:
              "GEMINI_API_KEY ve SERPAPI_KEY ekle.")
     st.stop()
 
+try:
+    IMGBB_KEY = st.secrets["IMGBB_KEY"]  # İsteğe bağlı: fotoğrafla birebir arama için
+except Exception:
+    IMGBB_KEY = None
+
 # ---------------------------------
 # FONKSİYONLAR
 # ---------------------------------
@@ -384,6 +389,74 @@ def fiyatlari_ara(urun_adi, api_key, min_fiyat=0):
     return sonuc.get("shopping_results") or sonuc.get("inline_shopping_results") or []
 
 
+def gorsel_yukle(image, api_key):
+    """Fotoğrafı 10 dakika sonra kendini silen geçici bir bağlantıya yükler."""
+    foto = image.copy()
+    foto.thumbnail((1000, 1000))
+    buf = io.BytesIO()
+    foto.save(buf, format="JPEG", quality=85)
+    govde = urlencode({"image": base64.b64encode(buf.getvalue()).decode("utf-8")})
+    req = Request(
+        "https://api.imgbb.com/1/upload?" + urlencode({"key": api_key, "expiration": 600}),
+        data=govde.encode("utf-8"), method="POST",
+    )
+    try:
+        with urlopen(req, timeout=30) as r:
+            veri = json.loads(r.read().decode("utf-8"))
+    except HTTPError as ex:
+        raise Exception(f"Fotoğraf yüklenemedi (imgbb {ex.code}). IMGBB_KEY'i kontrol et.")
+    except (URLError, TimeoutError):
+        raise Exception("Fotoğraf yükleme servisine bağlanılamadı.")
+    url = (veri.get("data") or {}).get("url")
+    if not url:
+        raise Exception("Fotoğraf yüklenemedi.")
+    return url
+
+
+def lens_karti(r):
+    """Google Lens sonucunu, ürün kartının beklediği biçime çevirir."""
+    f = r.get("price")
+    if isinstance(f, dict):
+        gosterim, sayi, para = f.get("value"), f.get("extracted_value"), f.get("currency")
+    else:
+        gosterim, sayi, para = f, r.get("extracted_price"), None
+    return {
+        "title": r.get("title") or "Ürün",
+        "source": r.get("source") or "Bilinmeyen satıcı",
+        "price": str(gosterim).replace("*", "").strip() if gosterim else "-",
+        "extracted_price": sayi, "para": para,
+        "thumbnail": r.get("thumbnail") or r.get("image"),
+        "link": r.get("link"), "rating": r.get("rating"), "reviews": r.get("reviews"),
+    }
+
+
+def lens_ara(foto_url, api_key):
+    """Google Lens ile fotoğraftaki ürünün aynısını/benzerlerini fiyatlarıyla bulur."""
+    en_iyi = []
+    for tip in ("products", "visual_matches"):
+        params = urlencode({"engine": "google_lens", "url": foto_url, "type": tip,
+                            "hl": "tr", "country": "tr", "api_key": api_key})
+        req = Request("https://serpapi.com/search.json?" + params,
+                      headers={"User-Agent": "Mozilla/5.0"})
+        try:
+            with urlopen(req, timeout=60) as r:
+                veri = json.loads(r.read().decode("utf-8"))
+        except HTTPError as ex:
+            raise Exception(f"SerpApi hatası {ex.code}")
+        except (URLError, TimeoutError):
+            raise Exception("SerpApi'ye bağlanılamadı.")
+        hata = veri.get("error")
+        if hata and "hasn't returned any results" not in hata:
+            raise Exception(hata)
+        kartlar = [lens_karti(x) for x in (veri.get("visual_matches") or [])]
+        fiyatli = [k for k in kartlar if k["extracted_price"]
+                   and k["para"] in (None, "₺", "TL", "TRY")]
+        if len(fiyatli) >= 3:
+            return fiyatli
+        en_iyi = max(en_iyi, fiyatli, key=len)
+    return en_iyi
+
+
 def sorgu_adaylari(ad):
     """Uzun ürün adından, sonuç çıkana dek denenecek daha kısa ifadeler üretir."""
     temiz = re.sub(r"%\s?\d+(?:[.,]\d+)?|\(.*?\)", " ", ad)
@@ -555,33 +628,66 @@ kaynak = yuklenen or cekilen
 
 if kaynak is not None:
     try:
-        image = Image.open(kaynak).convert("RGB")
+        image = ImageOps.exif_transpose(Image.open(kaynak)).convert("RGB")
     except Exception as ex:
         st.error(f"Fotoğraf okunamadı: {ex}")
         st.stop()
 
     st.image(image, width=300)
 
-    if st.button("Ürünü tanı ve fiyatları getir", type="primary",
+    yontem = st.radio(
+        "Arama yöntemi",
+        ["Fotoğrafla birebir ara", "Ürün adıyla ara"],
+        horizontal=True,
+        index=0 if IMGBB_KEY else 1,
+        help="Birebir arama Google Lens kullanır; markasız ürünlerde aynısını bulur.",
+    )
+    if yontem.startswith("Fotoğrafla") and not IMGBB_KEY:
+        st.info("Birebir arama için Secrets'a IMGBB_KEY ekle (ücretsiz: api.imgbb.com). "
+                "Şimdilik ürün adıyla aranacak.")
+
+    if st.button("Ürünü bul ve fiyatları getir", type="primary",
                  use_container_width=True):
         st.session_state.pop("sonuclar", None)
 
-        anahtar = hashlib.md5(
-            kaynak.getvalue() + girilen_marka.strip().encode("utf-8")
-        ).hexdigest()
-        if st.session_state.get("tani_anahtar") != anahtar:
-            with st.status("Ürün tanınıyor…", expanded=True) as durum_kutusu:
+        st.session_state["mod"] = "isim"
+        if yontem.startswith("Fotoğrafla") and IMGBB_KEY:
+            with st.status("Fotoğraf görsel olarak aranıyor…", expanded=True) as d:
                 try:
-                    st.session_state["urun_adi"] = gemini_urun_tani(
-                        image, GEMINI_API_KEY, girilen_marka,
-                        durum=lambda m: st.write(m),
-                    )
-                    st.session_state["tani_anahtar"] = anahtar
-                    durum_kutusu.update(label="Ürün tanındı", state="complete", expanded=False)
+                    st.write("Fotoğraf geçici olarak yükleniyor (10 dk sonra silinir)…")
+                    foto_url = gorsel_yukle(image, IMGBB_KEY)
+                    st.write("Google Lens eşleşen ürünleri arıyor…")
+                    bulunan = lens_ara(foto_url, SERPAPI_KEY)
+                    if bulunan:
+                        st.session_state["sonuclar"] = bulunan
+                        st.session_state["mod"] = "gorsel"
+                        st.session_state.pop("urun_adi", None)
+                        st.session_state.pop("tani_anahtar", None)
+                        d.update(label="Eşleşen ürünler bulundu", state="complete", expanded=False)
+                    else:
+                        d.update(label="Görsel eşleşme yok, ürün adıyla aranacak",
+                                 state="complete")
                 except Exception as ex:
-                    durum_kutusu.update(label="Ürün tanınamadı", state="error")
-                    st.error(str(ex))
-                    st.stop()
+                    d.update(label="Görsel arama yapılamadı, ürün adıyla aranacak", state="error")
+                    st.warning(str(ex))
+
+        if st.session_state["mod"] == "isim":
+            anahtar = hashlib.md5(
+                kaynak.getvalue() + girilen_marka.strip().encode("utf-8")
+            ).hexdigest()
+            if st.session_state.get("tani_anahtar") != anahtar:
+                with st.status("Ürün tanınıyor…", expanded=True) as durum_kutusu:
+                    try:
+                        st.session_state["urun_adi"] = gemini_urun_tani(
+                            image, GEMINI_API_KEY, girilen_marka,
+                            durum=lambda m: st.write(m),
+                        )
+                        st.session_state["tani_anahtar"] = anahtar
+                        durum_kutusu.update(label="Ürün tanındı", state="complete", expanded=False)
+                    except Exception as ex:
+                        durum_kutusu.update(label="Ürün tanınamadı", state="error")
+                        st.error(str(ex))
+                        st.stop()
 
     # Algılanan ad düzenlenebilir: yanlışsa kullanıcı düzeltip yeniden arayabilir
     if "urun_adi" in st.session_state:
@@ -617,8 +723,9 @@ if sonuclar is not None:
     if not sonuclar:
         st.warning("Bu ürün için satış sonucu bulunamadı. Adı düzeltip tekrar dene.")
     else:
+        mod = st.session_state.get("mod", "isim")
         elenen = 0
-        if st.checkbox("Kılıf ve aksesuarları gizle", value=True):
+        if mod == "isim" and st.checkbox("Kılıf ve aksesuarları gizle", value=True):
             temiz, elenen = filtrele(sonuclar, st.session_state.get("aranan", ""))
             if temiz:
                 sonuclar = temiz
@@ -627,19 +734,27 @@ if sonuclar is not None:
                 st.caption("Filtre tüm sonuçları eledi, filtresiz sonuçlar gösteriliyor.")
         if elenen:
             st.caption(f"{elenen} alakasız sonuç (kılıf, aksesuar vb.) gizlendi.")
-        st.caption(f"Aranan: {st.session_state.get('aranan', '')}")
-
-        siralama = st.radio("Sırala", ["En ucuz", "En yüksek puan"],
-                            horizontal=True, label_visibility="collapsed")
+        if mod == "gorsel":
+            st.caption("Fotoğrafa görsel olarak en çok benzeyen ürünler. "
+                       "Aynı ürünü küçük resimden doğrula.")
+            secenekler = ["Benzerlik", "En ucuz", "En yüksek puan"]
+        else:
+            st.caption(f"Aranan: {st.session_state.get('aranan', '')}")
+            secenekler = ["En ucuz", "En yüksek puan"]
+        siralama = st.radio("Sırala", secenekler, horizontal=True,
+                            label_visibility="collapsed")
 
         def fiyat_of(r):
             return float(r.get("extracted_price") or 1e12)
 
-        liste = sorted(sonuclar, key=fiyat_of)
-        fiyatlar = [fiyat_of(r) for r in liste if r.get("extracted_price")]
-        ucuz = liste[0] if fiyatlar else None
-        if siralama == "En yüksek puan":
-            liste = sorted(liste, key=lambda r: (-(r.get("rating") or 0), fiyat_of(r)))
+        fiyatlar = [fiyat_of(r) for r in sonuclar if r.get("extracted_price")]
+        ucuz = min(sonuclar, key=fiyat_of) if fiyatlar else None
+        if siralama == "Benzerlik":
+            liste = list(sonuclar)
+        elif siralama == "En yüksek puan":
+            liste = sorted(sonuclar, key=lambda r: (-(r.get("rating") or 0), fiyat_of(r)))
+        else:
+            liste = sorted(sonuclar, key=fiyat_of)
 
         if fiyatlar:
             st.markdown(
