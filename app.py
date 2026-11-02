@@ -3,6 +3,7 @@ import json
 import base64
 import io
 import time
+import re
 import random
 import html
 from urllib.request import Request, urlopen
@@ -64,6 +65,22 @@ html, body, [class*="css"], .stApp {
 .hero p { margin: 6px 0 0 0; opacity: .85; font-size: 1rem; }
 
 /* Girişler */
+[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label { color: var(--ink) !important; font-weight: 600; }
+.stTextInput input {
+    color: var(--ink) !important;
+    -webkit-text-fill-color: var(--ink) !important;
+    background: #fff !important;
+}
+.stTextInput input::placeholder { color: #8A958F !important; -webkit-text-fill-color: #8A958F !important; }
+[data-testid="stCaptionContainer"] { color: var(--muted) !important; }
+[data-testid="stFileUploader"] section * { color: var(--ink) !important; }
+[data-testid="stFileUploader"] section button,
+[data-testid="stFileUploader"] section button * {
+    background: var(--brand) !important; color: #fff !important; border-radius: 10px;
+}
+.stTabs [data-baseweb="tab"] p { color: var(--ink) !important; font-weight: 600; }
+.stTabs [aria-selected="true"] p { color: var(--brand) !important; }
+.stTabs [data-baseweb="tab-highlight"] { background: var(--brand) !important; }
 .stTextInput input {
     border-radius: 12px;
     border: 1px solid var(--line);
@@ -185,12 +202,37 @@ except Exception:
 # ---------------------------------
 # FONKSİYONLAR
 # ---------------------------------
-# Eski gemini-1.5 modelleri kapatıldı. Biri yoğunsa sıradakine geçilir.
-MODELLER = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-]
+# Model adları sık değiştiği için liste Google'dan canlı çekilir.
+# Çekilemezse bu yedek liste kullanılır.
+YEDEK_MODELLER = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def mevcut_modeller(api_key):
+    """generateContent destekleyen kararlı flash modellerini yeniden eskiye sıralar."""
+    try:
+        req = Request(
+            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+            headers={"x-goog-api-key": api_key},
+        )
+        with urlopen(req, timeout=20) as r:
+            veri = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return YEDEK_MODELLER
+
+    adaylar = []
+    for m in veri.get("models", []):
+        if "generateContent" not in m.get("supportedGenerationMethods", []):
+            continue
+        ad = m["name"].split("/", 1)[-1]
+        eslesme = re.fullmatch(r"gemini-(\d+(?:\.\d+)?)-flash(-lite)?", ad)
+        if eslesme:
+            adaylar.append((float(eslesme.group(1)), not eslesme.group(2), ad))
+    # En yeni sürüm önce; aynı sürümde normal flash, lite'tan önce gelir
+    adaylar.sort(reverse=True)
+    return [a[2] for a in adaylar[:4]] or YEDEK_MODELLER
+
+
 GECICI_HATALAR = {429, 500, 502, 503, 504}
 DENEME_SAYISI = 4
 
@@ -229,8 +271,8 @@ def gemini_urun_tani(image, api_key, marka_ipucu=""):
     son_hata = ""
     son_kod = None
 
-    for model_adi in MODELLER:
-        gen_config = {"temperature": 0.1, "maxOutputTokens": 120}
+    for model_adi in mevcut_modeller(api_key):
+        gen_config = {"temperature": 0.1, "maxOutputTokens": 512}
         if model_adi.startswith("gemini-2.5"):
             gen_config["thinkingConfig"] = {"thinkingBudget": 0}  # Hızlı yanıt
 
