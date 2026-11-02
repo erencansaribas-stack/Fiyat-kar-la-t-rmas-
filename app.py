@@ -234,7 +234,7 @@ def mevcut_modeller(api_key):
 
 
 GECICI_HATALAR = {429, 500, 502, 503, 504}
-DENEME_SAYISI = 4
+DENEME_SAYISI = 3
 
 
 def _hata_mesaji(ex):
@@ -246,9 +246,9 @@ def _hata_mesaji(ex):
         return ""
 
 
-def gemini_urun_tani(image, api_key, marka_ipucu=""):
+def gemini_urun_tani(image, api_key, marka_ipucu="", durum=None):
     foto = image.copy()  # Orijinal görsel bozulmasın
-    foto.thumbnail((800, 800))
+    foto.thumbnail((640, 640))
     buffered = io.BytesIO()
     foto.save(buffered, format="JPEG", quality=70)
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
@@ -257,15 +257,16 @@ def gemini_urun_tani(image, api_key, marka_ipucu=""):
         talimat = (
             f"Kullanıcı bu ürünün '{marka_ipucu.strip()}' markasına ait olduğunu "
             "belirtti. Fotoğraftaki ana ürünün tam modelini üzerindeki yazıları "
-            "okuyarak belirle. Yorum yapma. Sadece Google Shopping'de aratılacak "
-            "en doğru ve net ürün adını tek satır olarak yaz."
+            "okuyarak belirle. Yazı okunmuyorsa görünümden en olası marka ve modeli tahmin et. "
+            "Açıklama, soru veya özür yazma; sadece Google Shopping'de aratılacak "
+            "ürün adını tek satır olarak yaz."
         )
     else:
         talimat = (
             "Bu fotoğrafta el ile tutulan veya odaklanılan ana ürünün tam marka "
-            "adını ve modelini, üzerindeki yazıları okuyarak belirle. Yorum yapma. "
-            "Sadece Google Shopping'de aratılacak en doğru ve net ürün adını "
-            "tek satır olarak yaz."
+            "adını ve modelini, üzerindeki yazıları okuyarak belirle. Yazı okunmuyorsa görünümden en olası marka ve "
+            "modeli tahmin et. Açıklama, soru veya özür yazma; sadece Google "
+            "Shopping'de aratılacak ürün adını tek satır olarak yaz."
         )
 
     son_hata = ""
@@ -288,6 +289,9 @@ def gemini_urun_tani(image, api_key, marka_ipucu=""):
         url = ("https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model_adi}:generateContent")
 
+        if durum:
+            durum(f"Model deneniyor: {model_adi}")
+
         for deneme in range(DENEME_SAYISI):
             req = Request(
                 url,
@@ -297,7 +301,7 @@ def gemini_urun_tani(image, api_key, marka_ipucu=""):
                 method="POST",
             )
             try:
-                with urlopen(req, timeout=40) as response:
+                with urlopen(req, timeout=25) as response:
                     sonuc = json.loads(response.read().decode("utf-8"))
                 parcalar = sonuc["candidates"][0]["content"]["parts"]
                 metin = "".join(p.get("text", "") for p in parcalar).strip()
@@ -309,7 +313,14 @@ def gemini_urun_tani(image, api_key, marka_ipucu=""):
             except HTTPError as ex:
                 son_kod = ex.code
                 son_hata = _hata_mesaji(ex)
+                if ex.code == 400 and "thinkingConfig" in gen_config:
+                    # Bu model thinkingBudget'ı kabul etmiyor: onsuz yeniden dene
+                    gen_config.pop("thinkingConfig")
+                    data["generationConfig"] = gen_config
+                    continue
                 if ex.code in GECICI_HATALAR:
+                    if durum:
+                        durum(f"{model_adi} yoğun, tekrar deneniyor ({deneme + 1}/{DENEME_SAYISI})")
                     # Üstel bekleme: ~1.5s, 3s, 6s (+ rastgele sapma)
                     time.sleep(1.5 * (2 ** deneme) + random.uniform(0, 0.7))
                     continue
@@ -428,18 +439,21 @@ if kaynak is not None:
         st.error(f"Fotoğraf okunamadı: {ex}")
         st.stop()
 
-    st.image(image, use_container_width=True)
+    st.image(image, width=300)
 
     if st.button("Ürünü tanı ve fiyatları getir", type="primary",
                  use_container_width=True):
         st.session_state.pop("sonuclar", None)
 
-        with st.spinner("Ürün tanınıyor… Sunucu yoğunsa birkaç deneme yapılabilir."):
+        with st.status("Ürün tanınıyor…", expanded=True) as durum_kutusu:
             try:
                 st.session_state["urun_adi"] = gemini_urun_tani(
-                    image, GEMINI_API_KEY, girilen_marka
+                    image, GEMINI_API_KEY, girilen_marka,
+                    durum=lambda m: st.write(m),
                 )
+                durum_kutusu.update(label="Ürün tanındı", state="complete", expanded=False)
             except Exception as ex:
+                durum_kutusu.update(label="Ürün tanınamadı", state="error")
                 st.error(str(ex))
                 st.stop()
 
