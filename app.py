@@ -2,857 +2,582 @@ import streamlit as st
 import json
 import base64
 import io
-import time
 import re
-import hashlib
-from concurrent.futures import ThreadPoolExecutor
-import random
 import html
+import time
+import random
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
 from urllib.error import HTTPError, URLError
+
 from PIL import Image, ImageOps
 
-# ---------------------------------
-# SAYFA AYARLARI
-# ---------------------------------
+# ============================================================
+# AYARLAR
+# ============================================================
 st.set_page_config(
     page_title="Akıllı Alışveriş Asistanı",
     page_icon="🛍️",
     layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
-# ---------------------------------
+# ============================================================
 # TASARIM
-# ---------------------------------
-st.markdown(
-    """
+# ============================================================
+st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap');
-
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
 :root {
-    --bg: #F6F7F4;
-    --ink: #14201C;
-    --muted: #66726D;
-    --line: #E1E6E2;
-    --brand: #0F6B57;
-    --brand-dark: #0A4F40;
-    --gold: #F2B84B;
+  --bg:#F5F7F5; --surface:#FFFFFF; --ink:#17231E; --muted:#718078;
+  --line:#E3E9E5; --brand:#126B55; --brand2:#0C5141; --soft:#EAF4EF;
 }
-
-html, body, [class*="css"], .stApp {
-    font-family: 'Manrope', sans-serif;
-    color: var(--ink);
-}
-.stApp { background: var(--bg); }
-
-#MainMenu, footer, header { visibility: hidden; }
-.block-container { padding-top: 1.5rem; max-width: 760px; }
-
-/* Üst başlık */
+html, body, [class*="css"], .stApp {font-family:'Manrope',sans-serif;color:var(--ink);}
+.stApp {background:var(--bg);}
+#MainMenu, footer, header {visibility:hidden;}
+.block-container {max-width:820px;padding-top:1.4rem;padding-bottom:3rem;}
 .hero {
-    background: var(--brand);
-    color: #fff;
-    border-radius: 22px;
-    padding: 28px 26px;
-    margin-bottom: 22px;
+  background:linear-gradient(135deg,#0C5141,#168267);
+  color:white;border-radius:24px;padding:26px 24px;margin-bottom:18px;
+  box-shadow:0 12px 28px rgba(12,81,65,.12);
 }
-.hero h1 {
-    margin: 0;
-    font-size: 1.9rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    color: #fff;
+.hero h1 {font-size:1.8rem;font-weight:800;letter-spacing:-.04em;margin:0;color:white;}
+.hero p {margin:7px 0 0;color:#E0F0E9;font-size:.95rem;}
+.section-title {font-size:1.05rem;font-weight:800;margin:18px 0 8px;}
+.hint {color:var(--muted);font-size:.83rem;}
+[data-testid="stWidgetLabel"] p,[data-testid="stWidgetLabel"] label {color:var(--ink)!important;font-weight:700;}
+.stTextInput input,.stTextArea textarea {background:white!important;color:var(--ink)!important;border-radius:12px!important;}
+.stTextInput input::placeholder {color:#98A39D!important;}
+[data-testid="stFileUploader"] section {background:white;border:1.5px dashed #B9C9C0;border-radius:16px;}
+.stButton>button {border-radius:13px;font-weight:800;min-height:2.8rem;}
+.stButton>button[kind="primary"] {background:var(--brand);border:0;}
+.stButton>button[kind="primary"]:hover {background:var(--brand2);}
+.stButton>button[kind="secondary"] {background:white;border:1px solid var(--line);}
+.stTabs [data-baseweb="tab"] {font-weight:700;}
+.detected {background:white;border:1px solid var(--line);border-left:5px solid var(--brand);
+  padding:14px 16px;border-radius:14px;margin:12px 0;}
+.detected small {display:block;color:var(--muted);font-size:.76rem;margin-bottom:4px;}
+.detected strong {font-size:1.05rem;}
+.metric-row {display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin:14px 0;}
+.metric {background:white;border:1px solid var(--line);border-radius:14px;padding:12px;}
+.metric span {display:block;color:var(--muted);font-size:.75rem;}
+.metric b {font-size:1.02rem;}
+.metric.primary {background:var(--brand);border-color:var(--brand);color:white;}
+.metric.primary span {color:#D5EAE2;}
+.product {display:flex;gap:13px;align-items:center;background:white;border:1px solid var(--line);
+  border-radius:16px;padding:12px;margin:10px 0;position:relative;}
+.product.best {border:2px solid var(--brand);}
+.product img,.product .placeholder {width:86px;height:86px;object-fit:contain;flex-shrink:0;
+  border-radius:11px;background:#F8FAF8;}
+.product .placeholder {display:flex;align-items:center;justify-content:center;font-size:1.7rem;}
+.product .details {flex:1;min-width:0;}
+.product .price {font-size:1.22rem;font-weight:800;color:var(--brand);}
+.product .seller {font-weight:800;font-size:.9rem;margin-top:2px;}
+.product .name {font-size:.79rem;color:var(--muted);line-height:1.35;margin-top:3px;}
+.product a {display:inline-block;background:var(--ink);color:white!important;text-decoration:none;
+  padding:9px 12px;border-radius:10px;font-size:.78rem;font-weight:800;white-space:nowrap;}
+.product a:hover {background:var(--brand);}
+.pill {display:inline-block;background:var(--soft);color:var(--brand);font-size:.7rem;
+  font-weight:800;padding:4px 8px;border-radius:99px;margin-top:5px;}
+.warning {background:#FFF7E7;border:1px solid #F0D9A9;border-radius:12px;padding:11px 13px;
+  color:#72531A;font-size:.83rem;}
+@media(max-width:560px) {
+ .hero h1{font-size:1.48rem}.metric-row{grid-template-columns:1fr}
+ .product{align-items:flex-start;flex-wrap:wrap}.product a{width:100%;text-align:center;box-sizing:border-box}
+ .product img,.product .placeholder{width:72px;height:72px}
 }
-.hero p { margin: 6px 0 0 0; opacity: .85; font-size: 1rem; }
-
-/* Girişler */
-[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label { color: var(--ink) !important; font-weight: 600; }
-.stTextInput input {
-    color: var(--ink) !important;
-    -webkit-text-fill-color: var(--ink) !important;
-    background: #fff !important;
-}
-.stTextInput input::placeholder { color: #8A958F !important; -webkit-text-fill-color: #8A958F !important; }
-[data-testid="stCaptionContainer"] { color: var(--muted) !important; }
-[data-testid="stFileUploader"] section * { color: var(--ink) !important; }
-[data-testid="stFileUploader"] section button,
-[data-testid="stFileUploader"] section button * {
-    background: var(--brand) !important; color: #fff !important; border-radius: 10px;
-}
-.stTabs [data-baseweb="tab"] p { color: var(--ink) !important; font-weight: 600; }
-.stTabs [aria-selected="true"] p { color: var(--brand) !important; }
-.stTabs [data-baseweb="tab-highlight"] { background: var(--brand) !important; }
-.stTextInput input {
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    background: #fff;
-}
-.stTextInput input:focus { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
-[data-testid="stFileUploader"] section {
-    border-radius: 14px;
-    border: 1.5px dashed #B9C4BE;
-    background: #fff;
-}
-
-/* Butonlar */
-.stButton > button[kind="primary"] {
-    background: var(--brand);
-    border: none;
-    border-radius: 14px;
-    font-weight: 700;
-    padding: 0.7rem 1rem;
-}
-.stButton > button[kind="primary"]:hover { background: var(--brand-dark); }
-.stButton > button:focus-visible { outline: 3px solid var(--gold); }
-
-/* Algılanan ürün */
-.detected {
-    background: #fff;
-    border: 1px solid var(--line);
-    border-left: 5px solid var(--brand);
-    border-radius: 14px;
-    padding: 14px 18px;
-    margin: 14px 0;
-}
-.detected small { color: var(--muted); display: block; margin-bottom: 2px; }
-.detected b { font-size: 1.1rem; }
-
-/* Özet */
-.stats { display: flex; gap: 10px; margin: 8px 0 18px 0; }
-.stat {
-    flex: 1;
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 12px 14px;
-}
-.stat span { display: block; color: var(--muted); font-size: .78rem; }
-.stat b { font-size: 1.15rem; }
-.stat.best { background: var(--brand); border-color: var(--brand); color: #fff; }
-.stat.best span { color: #CFE6DF; }
-
-/* Ürün kartı */
-.card {
-    position: relative;
-    display: flex;
-    gap: 14px;
-    align-items: center;
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    padding: 12px;
-    margin-bottom: 10px;
-}
-.card.best { border: 2px solid var(--brand); }
-.card img {
-    width: 84px; height: 84px;
-    object-fit: contain;
-    border-radius: 10px;
-    background: #fff;
-    flex-shrink: 0;
-}
-.card .noimg {
-    width: 84px; height: 84px; border-radius: 10px;
-    background: var(--bg); display: flex;
-    align-items: center; justify-content: center;
-    font-size: 1.6rem; flex-shrink: 0;
-}
-.card .info { flex: 1; min-width: 0; }
-.card .price { font-size: 1.25rem; font-weight: 800; color: var(--brand); }
-.card .store { font-weight: 700; font-size: .92rem; }
-.card .title {
-    color: var(--muted); font-size: .82rem;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.card a.go {
-    background: var(--ink); color: #fff !important;
-    text-decoration: none; font-weight: 700; font-size: .85rem;
-    padding: 10px 14px; border-radius: 10px; white-space: nowrap;
-}
-.card a.go:hover { background: var(--brand); }
-.badge {
-    position: absolute; top: -10px; left: 14px;
-    background: var(--gold); color: var(--ink);
-    font-size: .72rem; font-weight: 800;
-    padding: 3px 10px; border-radius: 999px;
-}
-
-.card .match { font-weight: 700; }
-.card .match.ayni { color: var(--brand); }
-.card .match.benzer { color: #9A6B00; }
-.card .old { color: var(--muted); font-size: .8rem; font-weight: 500; margin-left: 8px; }
-.card .meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: .78rem; margin-top: 2px; }
-.stButton button[kind="secondary"], [data-testid="stBaseButton-secondary"] {
-    background: #fff !important; border: 1px solid var(--line) !important;
-    border-radius: 14px; font-weight: 700;
-}
-.stButton button[kind="secondary"] *, [data-testid="stBaseButton-secondary"] * { color: var(--ink) !important; }
-.stButton button[kind="primary"] *, [data-testid="stBaseButton-primary"] * { color: #fff !important; }
-[data-testid="stRadio"] label p, [data-testid="stCheckbox"] label p { color: var(--ink) !important; }
-
-@media (max-width: 520px) {
-    .hero h1 { font-size: 1.5rem; }
-    .card { flex-wrap: wrap; }
-    .card a.go { width: 100%; text-align: center; box-sizing: border-box; }
-    .stats { flex-direction: column; }
-}
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
-    """,
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-# ---------------------------------
-# API ANAHTARLARI
-# ---------------------------------
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-    SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
-except Exception:
-    st.error("API anahtarları bulunamadı. `.streamlit/secrets.toml` dosyasına "
-             "GEMINI_API_KEY ve SERPAPI_KEY ekle.")
-    st.stop()
-
-try:
-    IMGBB_KEY = st.secrets["IMGBB_KEY"]  
-except Exception:
-    IMGBB_KEY = None
-
-# ---------------------------------
-# FONKSİYONLAR
-# ---------------------------------
-YEDEK_MODELLER = ["gemini-1.5-flash-8b", "gemini-1.5-flash"]
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def mevcut_modeller(api_key):
+# ============================================================
+# GİZLİ ANAHTARLAR
+# ============================================================
+def get_secret(name, required=True):
     try:
-        req = Request(
-            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
-            headers={"x-goog-api-key": api_key},
-        )
-        with urlopen(req, timeout=20) as r:
-            veri = json.loads(r.read().decode("utf-8"))
+        value = st.secrets.get(name, "")
     except Exception:
-        return YEDEK_MODELLER
+        value = ""
+    value = str(value).strip() if value else ""
+    if required and not value:
+        st.error(f"`{name}` anahtarı bulunamadı. Streamlit Secrets bölümüne ekle.")
+        st.stop()
+    return value or None
 
-    adaylar = []
-    for m in veri.get("models", []):
-        if "generateContent" not in m.get("supportedGenerationMethods", []):
-            continue
-        ad = m["name"].split("/", 1)[-1]
-        eslesme = re.fullmatch(r"gemini-(\d+(?:\.\d+)?)-flash(-lite)?", ad)
-        if eslesme:
-            adaylar.append((float(eslesme.group(1)), not eslesme.group(2), ad))
-    adaylar.sort(reverse=True)
-    return [a[2] for a in adaylar[:4]] or YEDEK_MODELLER
+GEMINI_API_KEY = get_secret("GEMINI_API_KEY")
+SERPAPI_KEY = get_secret("SERPAPI_KEY")
+IMGBB_KEY = get_secret("IMGBB_KEY", required=False)
 
-GECICI_HATALAR = {429, 500, 502, 503, 504}
-DENEME_SAYISI = 3
-
-def _hata_mesaji(ex):
+# ============================================================
+# GENEL YARDIMCILAR
+# ============================================================
+def safe_json_loads(raw):
+    """Model cevabındaki JSON'u toleranslı biçimde ayıklar."""
+    raw = (raw or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I)
     try:
-        govde = json.loads(ex.read().decode("utf-8"))
-        return govde.get("error", {}).get("message", "")
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}|\[.*\]", raw, flags=re.S)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+def api_error_message(exc):
+    try:
+        body = json.loads(exc.read().decode("utf-8", errors="replace"))
+        err = body.get("error", {})
+        return err.get("message") or str(body)
     except Exception:
-        return ""
+        return str(exc)
 
-def gemini_urun_tani(image, api_key, marka_ipucu="", durum=None):
-    foto = image.copy()
-    foto.thumbnail((640, 640))
-    buffered = io.BytesIO()
-    foto.save(buffered, format="JPEG", quality=70)
-    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-    kural = (
-        "DİKKAT: Öncelikle fotoğraftaki nesnenin fiziksel olarak tam olarak ne olduğunu "
-        "(kupa, fincan, kase, tabak, şişe, kutu vb.) kesin ve hatasız bir şekilde belirle. "
-        "Örneğin fotoğraftaki bir fincan veya kupa ise, deseninden dolayı ona asla tabak deme. "
-        "Yazı okunmuyorsa görünümden marka, desen ve rengi belirle. "
-        "Cevap, Google Shopping'de aratılacak KISA bir ürün adı olsun: "
-        "marka, desen/renk ve AYIRT EDİCİ nesne türü (örn. mavi beyaz çiçekli porselen kupa). "
-        "En fazla 7 kelime kullan. Açıklama veya yorum yapmadan sadece tek satır ürün adı yaz."
+def post_json(url, payload, api_key, timeout=45):
+    req = Request(
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+        method="POST",
     )
-    
-    if marka_ipucu.strip():
-        talimat = (f"Kullanıcı bu ürünün '{marka_ipucu.strip()}' markasına ait olduğunu "
-                   "belirtti. " + kural)
-    else:
-        talimat = kural
+    try:
+        with urlopen(req, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        detail = api_error_message(exc)
+        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise RuntimeError(f"Bağlantı/zaman aşımı: {exc}") from exc
 
-    son_hata = ""
-    son_kod = None
+# ============================================================
+# GEMINI MODEL LİSTESİ VE GÖRSEL TANIMA
+# ============================================================
+FALLBACK_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash",
+]
 
-    for model_adi in mevcut_modeller(api_key):
-        gen_config = {"temperature": 0.1, "maxOutputTokens": 512}
-        if model_adi.startswith("gemini-2.5"):
-            gen_config["thinkingConfig"] = {"thinkingBudget": 0} 
+@st.cache_data(ttl=1800, show_spinner=False)
+def available_gemini_models(api_key):
+    """API'nin gerçekten bu anahtara açtığı generateContent modellerini bulur."""
+    url = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000"
+    req = Request(url, headers={"x-goog-api-key": api_key})
+    try:
+        with urlopen(req, timeout=20) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return FALLBACK_MODELS
 
-        data = {
-            "contents": [{
-                "parts": [
-                    {"text": talimat},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": img_str}},
-                ]
-            }],
-            "generationConfig": gen_config,
-        }
-        url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model_adi}:generateContent")
+    found = []
+    for model in data.get("models", []):
+        if "generateContent" not in model.get("supportedGenerationMethods", []):
+            continue
+        # baseModelId, models.list yanıtındaki sürümlü addan daha uygun olabilir.
+        name = (model.get("baseModelId") or model.get("name", "").split("/")[-1]).strip()
+        low = name.lower()
+        # Görsel/metin üretimi için Flash ailesini seç; TTS, live, image-only modelleri alma.
+        if not re.fullmatch(r"gemini-\d+(?:\.\d+)?-flash(?:-lite)?", low):
+            continue
+        found.append(name)
 
-        if durum:
-            durum(f"Model deneniyor: {model_adi}")
+    # Büyük sürüm ve ardından lite olmayan model önce gelsin.
+    def model_sort(name):
+        m = re.search(r"gemini-(\d+(?:\.\d+)?)-flash(-lite)?", name)
+        return (float(m.group(1)) if m else 0, 0 if (m and m.group(2)) else 1)
+    found = sorted(set(found), key=model_sort, reverse=True)
+    return found[:6] or FALLBACK_MODELS
 
-        for deneme in range(DENEME_SAYISI):
-            req = Request(
-                url,
-                data=json.dumps(data).encode("utf-8"),
-                headers={"Content-Type": "application/json",
-                         "x-goog-api-key": api_key},
-                method="POST",
-            )
-            try:
-                with urlopen(req, timeout=25) as response:
-                    sonuc = json.loads(response.read().decode("utf-8"))
-                parcalar = sonuc["candidates"][0]["content"]["parts"]
-                metin = "".join(p.get("text", "") for p in parcalar).strip()
-                if metin:
-                    return metin.splitlines()[0].strip(" *`\"'")
-                son_hata = "Model boş yanıt döndürdü."
-                break
+def image_to_jpeg_bytes(image, max_side=1100, quality=88):
+    img = ImageOps.exif_transpose(image).convert("RGB")
+    img.thumbnail((max_side, max_side))
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=quality, optimize=True)
+    return buffer.getvalue()
 
-            except HTTPError as ex:
-                son_kod = ex.code
-                son_hata = _hata_mesaji(ex)
-                if ex.code == 400 and "thinkingConfig" in gen_config:
-                    gen_config.pop("thinkingConfig")
-                    data["generationConfig"] = gen_config
-                    continue
-                if ex.code in GECICI_HATALAR:
-                    if durum:
-                        durum(f"{model_adi} yoğun, tekrar deneniyor ({deneme + 1}/{DENEME_SAYISI})")
-                    time.sleep(1.5 * (2 ** deneme) + random.uniform(0, 0.7))
-                    continue
-                break
+def gemini_generate(parts, api_key, max_tokens=400, json_mode=False):
+    models = available_gemini_models(api_key)
+    errors = []
+    for model in models:
+        cfg = {"temperature": 0.1, "maxOutputTokens": max_tokens}
+        if json_mode:
+            cfg["responseMimeType"] = "application/json"
+        payload = {"contents": [{"role": "user", "parts": parts}], "generationConfig": cfg}
+        endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        try:
+            result = post_json(endpoint, payload, api_key)
+            candidates = result.get("candidates") or []
+            if not candidates:
+                feedback = result.get("promptFeedback", {})
+                raise RuntimeError(f"Model yanıt üretmedi. Güvenlik/istem bilgisi: {feedback}")
+            content = candidates[0].get("content", {})
+            text_parts = [p.get("text", "") for p in content.get("parts", []) if p.get("text")]
+            answer = "\n".join(text_parts).strip()
+            if answer:
+                return answer, model
+            raise RuntimeError("Model boş yanıt döndürdü.")
+        except Exception as exc:
+            errors.append(f"{model}: {exc}")
+            # Yetki/kota gibi anahtar kaynaklı sorunlarda diğer modeller de çalışmayabilir;
+            # yine de model listesi içindeki sonraki uygun modeli deniyoruz.
+            continue
+    raise RuntimeError("Gemini ile ürün analizi yapılamadı.\n" + "\n".join(errors[-4:]))
 
-            except (URLError, TimeoutError) as ex:
-                son_hata = str(ex)
-                time.sleep(1.5 * (deneme + 1))
-                continue
+def identify_product(image, api_key, brand_hint=""):
+    jpeg = image_to_jpeg_bytes(image, max_side=1200, quality=90)
+    encoded = base64.b64encode(jpeg).decode("ascii")
+    hint = f"Kullanıcının verdiği marka ipucu: {brand_hint.strip()}." if brand_hint.strip() else ""
 
-            except (KeyError, IndexError, json.JSONDecodeError) as ex:
-                son_hata = f"Beklenmeyen yanıt biçimi: {ex}"
-                break
+    prompt = f"""
+Sen deneyimli bir e-ticaret ürün katalog uzmanısın. Fotoğrafı dikkatle incele.
+{hint}
 
-    if son_kod in (401, 403) or (son_kod == 400 and "API key" in son_hata):
-        raise Exception("Gemini API anahtarı geçersiz veya yetkisiz. Anahtarı kontrol et.")
-    if son_kod == 429:
-        raise Exception("Gemini kullanım kotası doldu. Biraz bekleyip tekrar dene.")
-    if son_kod in GECICI_HATALAR:
-        raise Exception("Gemini sunucuları şu an çok yoğun. Tüm modeller denendi; "
-                        "1-2 dakika sonra tekrar dene.")
-    raise Exception(f"Gemini hatası ({son_kod or 'bağlantı'}): {son_hata}")
+ÖNEMLİ KURALLAR:
+- Önce nesnenin gerçek türünü belirle: yemek tabağı, servis tabağı, pasta tabağı,
+  kase, çukur tabak, fincan, kupa, bardak, çay seti, tencere vb.
+- Fincanı tabak, kaseyi tabak, bardağı kupa olarak sınıflandırma.
+- Porselen/seramik/cam/emaye/metal gibi malzemeyi yalnızca görüntü destekliyorsa belirt.
+- Desen, baskı, ana renk ve görülebilen marka/logoyu ayırt et.
+- Marka okunmuyorsa marka uydurma; null yaz.
+- Fotoğraf tek başına model kodunu veya üreticiyi kanıtlamıyorsa uydurma.
+- Ürün birden fazla parçalı set ise bunu belirt.
+- Arama için kısa, Türkçe ve alışverişte kullanılabilir bir ürün adı oluştur.
+- Emin olmadığın alanları null bırak; tahminini kesin bilgi gibi sunma.
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fiyatlari_ara(urun_adi, api_key, min_fiyat=0):
-    istek = {
+SADECE şu JSON biçiminde yanıt ver:
+{{
+ "product_type": "ürünün açık türü",
+ "material": "malzeme veya null",
+ "brand": "marka veya null",
+ "pattern": "desen veya null",
+ "color": "renk veya null",
+ "set_info": "set bilgisi veya null",
+ "search_query": "Google Shopping için kısa ve net arama sorgusu",
+ "confidence": 0-100,
+ "visual_notes": "görselde gerçekten seçilebilen kısa ayırt edici özellikler"
+}}
+"""
+    answer, model = gemini_generate(
+        [
+            {"text": prompt},
+            {"inline_data": {"mime_type": "image/jpeg", "data": encoded}},
+        ],
+        api_key,
+        max_tokens=500,
+        json_mode=True,
+    )
+    data = safe_json_loads(answer)
+    if not isinstance(data, dict) or not data.get("search_query"):
+        raise RuntimeError(f"Gemini beklenen ürün bilgisini döndürmedi: {answer[:500]}")
+    data["_model"] = model
+    return data
+
+# ============================================================
+# SERPAPI GOOGLE SHOPPING
+# ============================================================
+@st.cache_data(ttl=900, show_spinner=False)
+def shopping_search(query, api_key):
+    params = urlencode({
         "engine": "google_shopping",
-        "q": urun_adi,
+        "q": query,
         "hl": "tr",
         "gl": "tr",
         "api_key": api_key,
-    }
-    if min_fiyat:
-        istek["min_price"] = int(min_fiyat)
-    params = urlencode(istek)
-    req = Request("https://serpapi.com/search.json?" + params,
-                  headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urlopen(req, timeout=30) as response:
-            sonuc = json.loads(response.read().decode("utf-8"))
-    except HTTPError as ex:
-        raise Exception(f"SerpApi hatası {ex.code}")
-    except (URLError, TimeoutError):
-        raise Exception("SerpApi'ye bağlanılamadı.")
-
-    hata = sonuc.get("error")
-    if hata:
-        if "hasn't returned any results" in hata:
-            return []
-        raise Exception(hata)
-    return sonuc.get("shopping_results") or sonuc.get("inline_shopping_results") or []
-
-def gorsel_yukle(image, api_key=None):
-    foto = image.copy()
-    foto.thumbnail((1000, 1000))
-    buf = io.BytesIO()
-    foto.save(buf, format="JPEG", quality=85)
-    try:
-        if api_key:
-            govde = urlencode({"image": base64.b64encode(buf.getvalue()).decode("utf-8")})
-            req = Request(
-                "https://api.imgbb.com/1/upload?" + urlencode({"key": api_key, "expiration": 600}),
-                data=govde.encode("utf-8"), method="POST",
-            )
-            with urlopen(req, timeout=30) as r:
-                url = (json.loads(r.read().decode("utf-8")).get("data") or {}).get("url")
-        else:
-            import requests 
-            r = requests.post(
-                "https://litterbox.catbox.moe/resources/internals/api.php",
-                data={"reqtype": "fileupload", "time": "1h"},
-                files={"fileToUpload": ("urun.jpg", buf.getvalue(), "image/jpeg")},
-                timeout=30,
-            )
-            url = r.text.strip() if r.ok and r.text.strip().startswith("http") else None
-    except HTTPError as ex:
-        raise Exception(f"Fotoğraf yüklenemedi (imgbb {ex.code}). IMGBB_KEY'i kontrol et.")
-    except Exception:
-        raise Exception("Fotoğraf yükleme servisine bağlanılamadı.")
-    if not url:
-        raise Exception("Fotoğraf yüklenemedi.")
-    return url
-
-def lens_karti(r):
-    f = r.get("price")
-    if isinstance(f, dict):
-        gosterim, sayi, para = f.get("value"), f.get("extracted_value"), f.get("currency")
-    else:
-        gosterim, sayi, para = f, r.get("extracted_price"), None
-    return {
-        "title": r.get("title") or "Ürün",
-        "source": r.get("source") or "Bilinmeyen satıcı",
-        "price": str(gosterim).replace("*", "").strip() if gosterim else "-",
-        "extracted_price": sayi, "para": para,
-        "thumbnail": r.get("thumbnail") or r.get("image"),
-        "link": r.get("link"), "rating": r.get("rating"), "reviews": r.get("reviews"),
-    }
-
-def lens_ara(foto_url, api_key):
-    en_iyi = []
-    for tip in ("products", "visual_matches"):
-        params = urlencode({"engine": "google_lens", "url": foto_url, "type": tip,
-                            "hl": "tr", "country": "tr", "api_key": api_key})
-        req = Request("https://serpapi.com/search.json?" + params,
-                      headers={"User-Agent": "Mozilla/5.0"})
-        try:
-            with urlopen(req, timeout=60) as r:
-                veri = json.loads(r.read().decode("utf-8"))
-        except HTTPError as ex:
-            raise Exception(f"SerpApi hatası {ex.code}")
-        except (URLError, TimeoutError):
-            raise Exception("SerpApi'ye bağlanılamadı.")
-        hata = veri.get("error")
-        if hata and "hasn't returned any results" not in hata:
-            raise Exception(hata)
-        kartlar = [lens_karti(x) for x in (veri.get("visual_matches") or [])]
-        fiyatli = [k for k in kartlar if k["extracted_price"]
-                   and k["para"] in (None, "₺", "TL", "TRY")]
-        if len(fiyatli) >= 3:
-            return fiyatli
-        en_iyi = max(en_iyi, fiyatli, key=len)
-    return en_iyi
-
-def _gemini_metin(parcalar, api_key, maks=256):
-    son_hata, son_kod = "", None
-    for model_adi in mevcut_modeller(api_key)[:3]:
-        cfg = {"temperature": 0, "maxOutputTokens": maks,
-               "responseMimeType": "application/json"}
-        if model_adi.startswith("gemini-2.5"):
-            cfg["thinkingConfig"] = {"thinkingBudget": 0}
-        url = ("https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{model_adi}:generateContent")
-        for deneme in range(2):
-            data = {"contents": [{"parts": parcalar}], "generationConfig": cfg}
-            req = Request(url, data=json.dumps(data).encode("utf-8"),
-                          headers={"Content-Type": "application/json",
-                                   "x-goog-api-key": api_key}, method="POST")
-            try:
-                with urlopen(req, timeout=40) as r:
-                    sonuc = json.loads(r.read().decode("utf-8"))
-                return "".join(p.get("text", "") for p in
-                               sonuc["candidates"][0]["content"]["parts"])
-            except HTTPError as ex:
-                son_kod, son_hata = ex.code, _hata_mesaji(ex)
-                if ex.code == 400 and "thinkingConfig" in cfg:
-                    cfg.pop("thinkingConfig")
-                    continue
-                if ex.code in GECICI_HATALAR:
-                    time.sleep(1.5 * (deneme + 1))
-                    continue
-                break
-            except (URLError, TimeoutError, KeyError, IndexError, json.JSONDecodeError) as ex:
-                son_hata = str(ex)
-                break
-    raise Exception(f"Gemini yanıt vermedi ({son_kod or 'bağlantı'}): {son_hata}")
-
-def kucuk_resim_indir(url):
-    try:
-        if url.startswith("data:image"):
-            bas, veri = url.split(",", 1)
-            return bas[5:].split(";")[0], veri
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urlopen(req, timeout=10) as r:
-            tip = r.headers.get_content_type()
-            veri = r.read(400_000)
-        if tip not in ("image/jpeg", "image/png", "image/webp"):
-            return None
-        return tip, base64.b64encode(veri).decode("utf-8")
-    except Exception:
-        return None
-
-def eslestir(image, adaylar, api_key):
-    foto = image.copy()
-    foto.thumbnail((640, 640))
-    buf = io.BytesIO()
-    foto.save(buf, format="JPEG", quality=75)
-    parcalar = [
-        {"text": "Birinci görsel kullanıcının aradığı ÜRÜN. Sonraki görseller numaralı "
-                 "adaylar. Her aday için, birinci görseldeki ürünün AYNISI olup olmadığını "
-                 "0-10 puanla (aynı model, tasarım, renk ve desen = 9-10). Aynı marka veya "
-                 "aynı türde olması yetmez; model, desen veya renk farklıysa düşük puan ver. "
-                 "Sadece aday sayısı kadar tam sayıdan oluşan bir JSON dizisi döndür, örn: [9,2,0]"},
-        {"inline_data": {"mime_type": "image/jpeg",
-                         "data": base64.b64encode(buf.getvalue()).decode("utf-8")}},
-    ]
-    with ThreadPoolExecutor(8) as ex:
-        resimler = list(ex.map(kucuk_resim_indir,
-                               [a.get("thumbnail") or "" for a in adaylar]))
-    kullanilan = []
-    for a, r in zip(adaylar, resimler):
-        if r:
-            kullanilan.append(a)
-            parcalar += [{"text": f"Aday {len(kullanilan)}:"},
-                         {"inline_data": {"mime_type": r[0], "data": r[1]}}]
-    if not kullanilan:
-        raise Exception("Aday resimleri indirilemedi.")
-    eslesen = re.search(r"\[[\d,\s]*\]", _gemini_metin(parcalar, api_key))
-    if not eslesen:
-        raise Exception("Karşılaştırma sonucu okunamadı.")
-    for a, puan in zip(kullanilan, json.loads(eslesen.group(0))):
-        a["eslesme"] = max(0, min(10, int(puan)))
-    return adaylar
-
-def sorgu_adaylari(ad):
-    temiz = re.sub(r"%\s?\d+(?:[.,]\d+)?|\(.*?\)", " ", ad)
-    temiz = re.sub(r"\b\d[\d.,]*\s?(?:iu|ml|gr?|mg|kg|lt?|adet|cm|mm)\b", " ",
-                   temiz, flags=re.I)
-    kelimeler = temiz.split()
-    adaylar = []
-    for n in (len(kelimeler), 5, 3):
-        q = " ".join(kelimeler[:n]).strip()
-        if q and q not in adaylar:
-            adaylar.append(q)
-    return adaylar or [ad]
-
-def fiyatlari_getir(urun_adi, api_key):
-    ilk, sorgu = [], urun_adi
-    for aday in sorgu_adaylari(urun_adi):
-        ilk, sorgu = fiyatlari_ara(aday, api_key), aday
-        if ilk:
-            break
-    if not ilk:
-        return [], sorgu
-
-    yasak = [k for k in AKSESUAR_KELIMELERI if k not in normalize(sorgu)]
-    aksesuar = sum(
-        1 for r in ilk
-        if any(re.search(r"\b" + re.escape(k), normalize(r.get("title", "")))
-               for k in yasak)
+    })
+    req = Request(
+        "https://serpapi.com/search.json?" + params,
+        headers={"User-Agent": "Mozilla/5.0"},
     )
-    temiz, _ = filtrele(ilk, sorgu)
-    fiyatlar = [float(r["extracted_price"]) for r in ilk if r.get("extracted_price")]
-    if len(temiz) >= 3 or aksesuar < len(ilk) * 0.4 or not fiyatlar:
-        return ilk, sorgu
+    try:
+        with urlopen(req, timeout=35) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        raise RuntimeError(f"SerpApi HTTP {exc.code}: {api_error_message(exc)}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise RuntimeError(f"SerpApi bağlantı hatası: {exc}") from exc
 
-    ikinci = fiyatlari_ara(sorgu, api_key, min_fiyat=max(fiyatlar) * 2)
-    gorulen, birlesik = set(), []
-    for r in ilk + ikinci:
-        anahtar = (r.get("title"), r.get("source"))
-        if anahtar not in gorulen:
-            gorulen.add(anahtar)
-            birlesik.append(r)
-    return birlesik, sorgu
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("shopping_results") or data.get("inline_shopping_results") or []
 
-def fiyat_goster(x):
-    return f"{x:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
+def normalize(text):
+    table = str.maketrans({
+        "ı":"i","İ":"i","ş":"s","Ş":"s","ğ":"g","Ğ":"g",
+        "ü":"u","Ü":"u","ö":"o","Ö":"o","ç":"c","Ç":"c",
+    })
+    return re.sub(r"[^a-z0-9 ]+", " ", str(text or "").translate(table).lower()).strip()
 
-AKSESUAR_KELIMELERI = [
-    "kilif", "kapak", "case", "cover", "silikon", "koruyucu", "aksesuar",
-    "film", "ear tips", "kulaklik ucu", "kordon", "askili", "askilik",
-    "tutucu", "sticker", "etiket", "temizleme", "temizlik", "aparat", "yedek",
+ACCESSORY_WORDS = [
+    "kilif", "kapak", "case", "cover", "koruyucu", "aksesuar", "film",
+    "kulaklik ucu", "kordon", "askilik", "tutucu", "sticker", "etiket",
+    "temizleme", "temizlik", "aparat", "yedek parca",
 ]
 
-def normalize(metin):
-    tablo = str.maketrans("ıİşŞğĞüÜöÖçÇ", "iissggUUooCC".replace("U", "u").replace("C", "c"))
-    metin = (metin or "").translate(tablo).lower()
-    return re.sub(r"[^a-z0-9 ]+", " ", metin)
+def parse_price(item):
+    price = item.get("price")
+    if isinstance(price, dict):
+        shown = price.get("value")
+        numeric = price.get("extracted_value")
+        currency = price.get("currency")
+    else:
+        shown = price
+        numeric = item.get("extracted_price")
+        currency = None
+    try:
+        numeric = float(numeric) if numeric is not None else None
+    except (TypeError, ValueError):
+        numeric = None
+    return shown, numeric, currency
 
-def filtrele(sonuclar, urun_adi):
-    sorgu = normalize(urun_adi)
-    tokenlar = sorgu.split()
-    yasak = [k for k in AKSESUAR_KELIMELERI if k not in sorgu]
+def normalize_result(raw):
+    shown, numeric, currency = parse_price(raw)
+    return {
+        "title": raw.get("title") or "Ürün",
+        "source": raw.get("source") or "Satıcı bilgisi yok",
+        "price": str(shown or "-").replace("*", "").strip(),
+        "numeric_price": numeric,
+        "currency": currency,
+        "image": raw.get("thumbnail") or raw.get("serpapi_thumbnail"),
+        "link": raw.get("product_link") or raw.get("link"),
+        "rating": raw.get("rating"),
+        "reviews": raw.get("reviews"),
+        "delivery": raw.get("delivery"),
+    }
 
-    uygun = []
-    for r in sonuclar:
-        baslik = normalize(r.get("title", ""))
-        kompakt = baslik.replace(" ", "")
-        if any(re.search(r"\b" + re.escape(k), baslik) for k in yasak):
+def filter_results(results, query):
+    tokens = [t for t in normalize(query).split() if len(t) > 1]
+    filtered = []
+    for item in results:
+        title = normalize(item["title"])
+        # Aksesuarları ana ürün aramasından çıkar.
+        if any(word in title for word in ACCESSORY_WORDS):
             continue
-        sayilar = [t for t in tokenlar if t.isdigit()] if len(tokenlar) <= 4 else []
-        if any(n not in baslik.split() for n in sayilar):
-            continue
-        if tokenlar:
-            bulunan = sum(1 for t in tokenlar if t in baslik or t in kompakt)
-            if bulunan / len(tokenlar) < 0.5:
+        if tokens:
+            matched = sum(1 for token in tokens if token in title)
+            # Kısa sorgularda eşleşme oranını biraz daha sıkı tut.
+            threshold = 0.5 if len(tokens) <= 3 else 0.4
+            if matched / len(tokens) < threshold:
                 continue
-        uygun.append(r)
+        filtered.append(item)
 
-    fiyatli = sorted(float(r["extracted_price"]) for r in uygun
-                     if r.get("extracted_price"))
-    if len(fiyatli) >= 5:
-        medyan = fiyatli[len(fiyatli) // 2]
-        uygun = [r for r in uygun
-                 if not r.get("extracted_price")
-                 or float(r["extracted_price"]) >= medyan * 0.4]
+    # Para birimi açıkça TL/TRY olmayan fiyatları TL istatistiğine dahil etme.
+    return filtered
 
-    return uygun, len(sonuclar) - len(uygun)
+def format_tl(value):
+    return f"{value:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
 
-def urun_karti(item, en_ucuz):
-    satici = html.escape(item.get("source", "Bilinmeyen satıcı"))
-    fiyat = html.escape(str(item.get("price", "-")))
-    eski = item.get("old_price")
-    baslik = html.escape(item.get("title", "Ürün"))
-    link = item.get("link") or item.get("product_link")
-    thumb = item.get("thumbnail")
-
-    gorsel = (f'<img src="{html.escape(thumb)}" alt="">' if thumb
-              else '<div class="noimg">🛍️</div>')
-    buton = (f'<a class="go" href="{html.escape(link)}" target="_blank" '
-             f'rel="noopener noreferrer">Mağazaya git</a>') if link else ""
-    rozet = '<span class="badge">En ucuz</span>' if en_ucuz else ""
-    sinif = "card best" if en_ucuz else "card"
-    eski_html = f'<s class="old">{html.escape(str(eski))}</s>' if eski else ""
-
-    meta = []
-    es = item.get("eslesme")
-    if es is not None:
-        meta.append('<span class="match ayni">Aynı ürün</span>' if es >= 7
-                    else '<span class="match benzer">Benzer ürün</span>')
-    puan, yorum = item.get("rating"), item.get("reviews")
-    if puan:
-        sayi = f" ({int(yorum):,})".replace(",", ".") if isinstance(yorum, (int, float)) and yorum else ""
-        meta.append(f"<span>⭐ {puan}{sayi}</span>")
-    teslimat = item.get("delivery")
-    if teslimat:
-        meta.append(f"<span>{html.escape(str(teslimat))}</span>")
-    meta_html = f'<div class="meta">{"".join(meta)}</div>' if meta else ""
-
+def render_product(item, is_best=False):
+    image_html = (
+        f'<img src="{html.escape(item["image"], quote=True)}" alt="Ürün görseli">'
+        if item.get("image") else '<div class="placeholder">🛍️</div>'
+    )
+    link = item.get("link")
+    link_html = (
+        f'<a href="{html.escape(link, quote=True)}" target="_blank" rel="noopener noreferrer">Ürünü incele ↗</a>'
+        if link else ""
+    )
+    best_label = '<span class="pill">En düşük fiyat</span>' if is_best else ""
+    title = html.escape(item.get("title", "Ürün"))
+    seller = html.escape(item.get("source", "Satıcı"))
+    price = html.escape(item.get("price", "-"))
+    rating = item.get("rating")
+    rating_html = f'<span class="pill">⭐ {html.escape(str(rating))}</span>' if rating else ""
     st.markdown(
-        f'<div class="{sinif}">{rozet}{gorsel}'
-        f'<div class="info"><div class="price">{fiyat}{eski_html}</div>'
-        f'<div class="store">{satici}</div>'
-        f'<div class="title" title="{baslik}">{baslik}</div>{meta_html}</div>{buton}</div>',
+        f'<div class="product {"best" if is_best else ""}>{image_html}'
+        f'<div class="details"><div class="price">{price}</div>'
+        f'<div class="seller">{seller}</div><div class="name">{title}</div>'
+        f'{best_label}{rating_html}</div>{link_html}</div>',
         unsafe_allow_html=True,
     )
 
-# ---------------------------------
-# BAŞLIK VE GİRİŞ
-# ---------------------------------
-st.markdown(
-    '<div class="hero"><h1>🛍️ Alışveriş Asistanı</h1>'
-    '<p>Ürünün fotoğrafını yükle, en uygun fiyatı bulalım.</p></div>',
-    unsafe_allow_html=True,
-)
+# ============================================================
+# ARAYÜZ
+# ============================================================
+st.markdown("""
+<div class="hero">
+  <h1>🛍️ Akıllı Alışveriş Asistanı</h1>
+  <p>Fotoğrafı yükle, ürünü tanıyalım ve mağazalardaki fiyatları karşılaştıralım.</p>
+</div>
+""", unsafe_allow_html=True)
 
-kullanici_adi = st.text_input("Adın", placeholder="Örn: Eren Can")
-if not kullanici_adi.strip():
-    st.info("Başlamak için adını yaz ve Enter'a bas.")
-    st.stop()
+with st.expander("Nasıl çalışır?", expanded=False):
+    st.markdown("""
+    1. Ürünün net bir fotoğrafını yükle veya kamerayla çek.
+    2. Yapay zekâ ürün türünü, malzemeyi, rengi ve deseni analiz etsin.
+    3. Oluşan arama adını gerekirse düzelt.
+    4. Google Shopping sonuçlarını fiyatlarına göre karşılaştır.
 
-st.markdown(f"Merhaba **{html.escape(kullanici_adi.strip())}** 👋")
+    **İpucu:** Ürünü tek başına, iyi ışıkta ve mümkünse önden çek. Marka/model yazısı varsa fotoğrafta görünsün.
+    """)
 
-# ---------------------------------
-# FOTOĞRAF VE MARKA
-# ---------------------------------
-girilen_marka = st.text_input(
-    "Marka (isteğe bağlı)",
-    placeholder="Örn: Zara, Ceel…",
-    help="Markayı yazarsan tanıma daha hızlı ve doğru olur.",
-)
+# Geçmiş aramayı temizleme
+top1, top2 = st.columns([3, 1])
+with top1:
+    st.markdown('<div class="section-title">Ürün fotoğrafı</div>', unsafe_allow_html=True)
+with top2:
+    if st.button("Temizle", use_container_width=True):
+        for key in ("product_data", "search_results", "last_query", "image_hash"):
+            st.session_state.pop(key, None)
+        st.rerun()
 
-sekme_yukle, sekme_kamera = st.tabs(["📤 Fotoğraf yükle", "📷 Kamera"])
-with sekme_yukle:
-    yuklenen = st.file_uploader(
-        "Fotoğraf seç", type=["jpg", "jpeg", "png"], label_visibility="collapsed"
+tab_upload, tab_camera = st.tabs(["📤 Fotoğraf yükle", "📷 Kamerayla çek"])
+with tab_upload:
+    uploaded = st.file_uploader(
+        "JPG, JPEG veya PNG seç",
+        type=["jpg", "jpeg", "png"],
+        help="En fazla 10 MB önerilir.",
     )
-with sekme_kamera:
-    cekilen = st.camera_input("Ürünün fotoğrafını çek", label_visibility="collapsed")
+with tab_camera:
+    camera = st.camera_input("Ürünü kadraja al")
 
-kaynak = yuklenen or cekilen
+source = uploaded or camera
+brand_hint = st.text_input(
+    "Marka (isteğe bağlı)",
+    placeholder="Örn. Kütahya Porselen, Güral, Paşabahçe",
+)
+extra_hint = st.text_input(
+    "Ürün hakkında bildiğin başka bir şey (isteğe bağlı)",
+    placeholder="Örn. 6 kişilik yemek tabağı, 27 cm",
+)
 
-if kaynak is not None:
+if source is not None:
     try:
-        image = ImageOps.exif_transpose(Image.open(kaynak)).convert("RGB")
-    except Exception as ex:
-        st.error(f"Fotoğraf okunamadı: {ex}")
+        raw_bytes = source.getvalue()
+        if len(raw_bytes) > 10 * 1024 * 1024:
+            st.error("Fotoğraf 10 MB'dan büyük. Daha küçük bir görsel yükle.")
+            st.stop()
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(raw_bytes))).convert("RGB")
+        st.image(image, caption="Yüklediğin ürün", use_container_width=True)
+    except Exception as exc:
+        st.error(f"Fotoğraf okunamadı: {exc}")
         st.stop()
 
-    st.image(image, width=300)
+    if st.button("🔎 Ürünü tanı ve fiyatları bul", type="primary", use_container_width=True):
+        st.session_state.pop("product_data", None)
+        st.session_state.pop("search_results", None)
+        st.session_state.pop("last_query", None)
 
-    yontem = st.radio(
-        "Arama yöntemi",
-        ["Fotoğrafla birebir ara", "Ürün adıyla ara"],
-        horizontal=True,
-        help="Birebir arama Google Lens kullanır; markasız ürünlerde aynısını bulur.",
+        with st.status("Fotoğraf analiz ediliyor…", expanded=True) as status:
+            try:
+                st.write("1/2 · Görsel Gemini'ye gönderiliyor…")
+                product = identify_product(image, GEMINI_API_KEY, brand_hint)
+                if extra_hint.strip():
+                    # Kullanıcının eklediği somut bilgiyi arama sorgusuna ekle.
+                    product["search_query"] = (
+                        product["search_query"] + " " + extra_hint.strip()
+                    ).strip()
+                st.session_state["product_data"] = product
+                st.write(f"Ürün tanındı · {product.get('_model', 'Gemini')}")
+                st.write("2/2 · Google Shopping fiyatları aranıyor…")
+                query = product["search_query"]
+                raw_results = shopping_search(query, SERPAPI_KEY)
+                results = [normalize_result(x) for x in raw_results]
+                filtered = filter_results(results, query)
+                # Filtre çok sert davranıp tüm ürünleri silerse sonuçları kaybetme.
+                if len(filtered) >= 2:
+                    results = filtered
+                st.session_state["search_results"] = results
+                st.session_state["last_query"] = query
+                status.update(label="Analiz tamamlandı", state="complete", expanded=False)
+            except Exception as exc:
+                status.update(label="İşlem tamamlanamadı", state="error", expanded=True)
+                st.error("**Teknik hata ayrıntısı:**")
+                st.code(str(exc))
+                st.info(
+                    "Bu hata mesajı sorunun Gemini model/anahtar, SerpApi kotası veya bağlantı "
+                    "kaynaklı olup olmadığını ayırt etmeye yardımcı olur."
+                )
+
+# Ürün bilgisi düzenlenebilir
+product = st.session_state.get("product_data")
+if product:
+    st.markdown('<div class="section-title">Tanımlanan ürün</div>', unsafe_allow_html=True)
+    brand = product.get("brand") or "Marka belirlenemedi"
+    details = [
+        ("Ürün türü", product.get("product_type")),
+        ("Malzeme", product.get("material")),
+        ("Marka", brand),
+        ("Desen", product.get("pattern")),
+        ("Renk", product.get("color")),
+        ("Set bilgisi", product.get("set_info")),
+    ]
+    cols = st.columns(2)
+    for index, (label, value) in enumerate(details):
+        with cols[index % 2]:
+            st.caption(label)
+            st.markdown(f"**{value or 'Belirlenemedi'}**")
+    confidence = product.get("confidence")
+    if isinstance(confidence, (int, float)):
+        st.caption(f"Yapay zekâ güven puanı: %{int(max(0, min(100, confidence)))}")
+    if product.get("visual_notes"):
+        st.caption(product["visual_notes"])
+
+    edited_query = st.text_input(
+        "Arama adını düzenle",
+        value=st.session_state.get("last_query", product.get("search_query", "")),
+        help="Yanlış ürün türü veya desen varsa burada düzeltip yeniden arat.",
+        key="editable_search_query",
     )
-    if st.button("Ürünü bul ve fiyatları getir", type="primary",
-                 use_container_width=True):
-        st.session_state.pop("sonuclar", None)
-
-        st.session_state["mod"] = "isim"
-        if yontem.startswith("Fotoğrafla"):
-            with st.status("Fotoğraf görsel olarak aranıyor…", expanded=True) as d:
-                try:
-                    st.write("Fotoğraf geçici olarak yükleniyor (en geç 1 saat sonra silinir)…")
-                    foto_url = gorsel_yukle(image, IMGBB_KEY)
-                    st.write("Google Lens eşleşen ürünleri arıyor…")
-                    bulunan = lens_ara(foto_url, SERPAPI_KEY)
-                    if bulunan:
-                        bulunan = bulunan[:12]
-                        st.write("Sonuçlar fotoğrafla karşılaştırılıyor…")
-                        try:
-                            eslestir(image, bulunan, GEMINI_API_KEY)
-                        except Exception as ex:
-                            st.warning(f"Eşleşme doğrulanamadı: {ex}")
-                        st.session_state["sonuclar"] = bulunan
-                        st.session_state["mod"] = "gorsel"
-                        st.session_state.pop("urun_adi", None)
-                        st.session_state.pop("tani_anahtar", None)
-                        d.update(label="Eşleşen ürünler bulundu", state="complete", expanded=False)
-                    else:
-                        d.update(label="Görsel eşleşme yok, ürün adıyla aranacak",
-                                 state="complete")
-                except Exception as ex:
-                    d.update(label="Görsel arama yapılamadı, ürün adıyla aranacak", state="error")
-                    st.warning(str(ex))
-
-        if st.session_state["mod"] == "isim":
-            anahtar = hashlib.md5(
-                kaynak.getvalue() + girilen_marka.strip().encode("utf-8")
-            ).hexdigest()
-            if st.session_state.get("tani_anahtar") != anahtar:
-                with st.status("Ürün tanınıyor…", expanded=True) as durum_kutusu:
-                    try:
-                        st.session_state["urun_adi"] = gemini_urun_tani(
-                            image, GEMINI_API_KEY, girilen_marka,
-                            durum=lambda m: st.write(m),
-                        )
-                        st.session_state["tani_anahtar"] = anahtar
-                        durum_kutusu.update(label="Ürün tanındı", state="complete", expanded=False)
-                    except Exception as ex:
-                        durum_kutusu.update(label="Ürün tanınamadı", state="error")
-                        st.error(str(ex))
-                        st.stop()
-
-    if "urun_adi" in st.session_state:
-        st.markdown(
-            f'<div class="detected"><small>Tanınan ürün</small>'
-            f'<b>{html.escape(st.session_state["urun_adi"])}</b></div>',
-            unsafe_allow_html=True,
-        )
-        duzeltilmis = st.text_input(
-            "Yanlışsa ürün adını düzelt",
-            value=st.session_state["urun_adi"],
-            key="urun_adi_duzenle_" + hashlib.md5(
-                st.session_state["urun_adi"].encode("utf-8")).hexdigest()[:8], 
-        )
-
-        if st.button("Fiyatları ara", use_container_width=True) or \
-                "sonuclar" not in st.session_state:
-            with st.spinner("Fiyatlar toplanıyor ve fotoğrafla karşılaştırılıyor…"):
-                try:
-                    sonuc, sorgu = fiyatlari_getir(duzeltilmis.strip(), SERPAPI_KEY)
-                    temiz, _ = filtrele(sonuc, sorgu)
-                    adaylar = (temiz or sonuc)[:12]
-                    try:
-                        eslestir(image, adaylar, GEMINI_API_KEY)
-                    except Exception:
-                        pass  
-                    st.session_state["sonuclar"] = adaylar
-                    st.session_state["aranan"] = sorgu
-                except Exception as ex:
-                    st.error(f"Fiyat arama hatası: {ex}")
-                    st.stop()
-
-# ---------------------------------
-# SONUÇLAR
-# ---------------------------------
-sonuclar = st.session_state.get("sonuclar")
-if sonuclar is not None:
-    if not sonuclar:
-        st.warning("Bu ürün için satış sonucu bulunamadı. Adı düzeltip tekrar dene.")
-    else:
-        mod = st.session_state.get("mod", "isim")
-        elenen = 0
-        if mod == "isim" and st.checkbox("Kılıf ve aksesuarları gizle", value=True):
-            temiz, elenen = filtrele(sonuclar, st.session_state.get("aranan", ""))
-            if temiz:
-                sonuclar = temiz
-            else:
-                elenen = 0
-                st.caption("Filtre tüm sonuçları eledi, filtresiz sonuçlar gösteriliyor.")
-        if elenen:
-            st.caption(f"{elenen} alakasız sonuç (kılıf, aksesuar vb.) gizlendi.")
-        dogrulanan = [r for r in sonuclar if r.get("eslesme") is not None]
-        if mod == "isim":
-            st.caption(f"Aranan: {st.session_state.get('aranan', '')}")
-        if dogrulanan:
-            ayni = [r for r in dogrulanan if r["eslesme"] >= 7]
-            if st.checkbox("Benzer ürünleri de göster", value=False):
-                sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])
-                st.caption("Fotoğraftaki ürünün aynısı ve benzerleri.")
-            elif ayni:
-                sonuclar = sorted(ayni, key=lambda r: -r["eslesme"])
-                st.caption(f"Fotoğraftaki ürünün aynısı olarak doğrulanan {len(ayni)} sonuç.")
-            else:
-                sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])[:3]
-                st.caption("Birebir aynısı bulunamadı, en yakın ürünler gösteriliyor.")
-        elif mod == "gorsel":
-            st.caption("Eşleşme doğrulanamadı, görsel olarak benzer ürünler gösteriliyor.")
-        secenekler = (["En ucuz", "Benzerlik", "En yüksek puan"] if mod == "gorsel"
-                      else ["En ucuz", "En yüksek puan"])
-        siralama = st.radio("Sırala", secenekler, horizontal=True,
-                            label_visibility="collapsed")
-
-        def fiyat_of(r):
-            return float(r.get("extracted_price") or 1e12)
-
-        fiyatlar = [fiyat_of(r) for r in sonuclar if r.get("extracted_price")]
-        ucuz = min(sonuclar, key=fiyat_of) if fiyatlar else None
-        if siralama == "Benzerlik":
-            liste = list(sonuclar)
-        elif siralama == "En yüksek puan":
-            liste = sorted(sonuclar, key=lambda r: (-(r.get("rating") or 0), fiyat_of(r)))
+    if st.button("Bu ürün adıyla fiyatları yeniden ara", use_container_width=True):
+        if not edited_query.strip():
+            st.warning("Arama adı boş olamaz.")
         else:
-            liste = sorted(sonuclar, key=fiyat_of)
+            with st.spinner("Yeni arama yapılıyor…"):
+                try:
+                    raw_results = shopping_search(edited_query.strip(), SERPAPI_KEY)
+                    results = [normalize_result(x) for x in raw_results]
+                    filtered = filter_results(results, edited_query.strip())
+                    if len(filtered) >= 2:
+                        results = filtered
+                    st.session_state["search_results"] = results
+                    st.session_state["last_query"] = edited_query.strip()
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Fiyat araması yapılamadı: {exc}")
 
-        if fiyatlar:
+# Sonuçlar
+results = st.session_state.get("search_results")
+if results is not None:
+    st.markdown('<div class="section-title">Fiyat karşılaştırması</div>', unsafe_allow_html=True)
+    st.caption(f'Aranan ifade: {st.session_state.get("last_query", "")}')
+    if not results:
+        st.warning("Bu arama için sonuç bulunamadı. Arama adını kısaltmayı veya marka/model eklemeyi dene.")
+    else:
+        priced = [
+            r for r in results
+            if r.get("numeric_price") is not None
+            and (r.get("currency") in (None, "", "₺", "TL", "TRY"))
+        ]
+        if priced:
+            values = [r["numeric_price"] for r in priced]
             st.markdown(
-                '<div class="stats">'
-                f'<div class="stat best"><span>En düşük</span><b>{fiyat_goster(min(fiyatlar))}</b></div>'
-                f'<div class="stat"><span>Ortalama</span><b>{fiyat_goster(sum(fiyatlar)/len(fiyatlar))}</b></div>'
-                f'<div class="stat"><span>En yüksek</span><b>{fiyat_goster(max(fiyatlar))}</b></div>'
-                '</div>',
+                f'<div class="metric-row">'
+                f'<div class="metric primary"><span>En düşük</span><b>{format_tl(min(values))}</b></div>'
+                f'<div class="metric"><span>Ortalama</span><b>{format_tl(sum(values)/len(values))}</b></div>'
+                f'<div class="metric"><span>En yüksek</span><b>{format_tl(max(values))}</b></div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
-            st.caption(f"{len(fiyatlar)} fiyata göre hesaplandı.")
+            st.caption(f"{len(values)} TL fiyatı üzerinden hesaplandı. Kargo ve ürün adedi farklı olabilir.")
 
-        for item in liste[:10]:
-            urun_karti(item, en_ucuz=(item is ucuz))
+        sort_mode = st.radio(
+            "Sıralama",
+            ["En ucuz", "En pahalı", "En yüksek puan"],
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        if sort_mode == "En ucuz":
+            ordered = sorted(results, key=lambda r: r.get("numeric_price") or float("inf"))
+        elif sort_mode == "En pahalı":
+            ordered = sorted(results, key=lambda r: r.get("numeric_price") or -1, reverse=True)
+        else:
+            ordered = sorted(results, key=lambda r: float(r.get("rating") or 0), reverse=True)
+
+        for item in ordered[:12]:
+            best = bool(priced) and item is min(priced, key=lambda r: r["numeric_price"])
+            render_product(item, is_best=best)
 
 st.markdown(
-    "<p style='text-align:center;color:#66726D;font-size:.8rem;margin-top:2rem'>"
-    "Görselden fiyat karşılaştırma asistanı</p>",
+    '<div style="text-align:center;color:#829087;font-size:.76rem;margin-top:34px">'
+    'Fiyatlar mağazalara ve zamana göre değişebilir. Satın almadan önce ürün adedini, '
+    'ölçüyü, kargo ücretini ve satıcı bilgilerini kontrol et.</div>',
     unsafe_allow_html=True,
 )
