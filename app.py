@@ -4,6 +4,7 @@ import base64
 import io
 import time
 import re
+import hashlib
 import random
 import html
 from urllib.request import Request, urlopen
@@ -176,6 +177,16 @@ html, body, [class*="css"], .stApp {
     padding: 3px 10px; border-radius: 999px;
 }
 
+.card .old { color: var(--muted); font-size: .8rem; font-weight: 500; margin-left: 8px; }
+.card .meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: .78rem; margin-top: 2px; }
+.stButton button[kind="secondary"], [data-testid="stBaseButton-secondary"] {
+    background: #fff !important; border: 1px solid var(--line) !important;
+    border-radius: 14px; font-weight: 700;
+}
+.stButton button[kind="secondary"] *, [data-testid="stBaseButton-secondary"] * { color: var(--ink) !important; }
+.stButton button[kind="primary"] *, [data-testid="stBaseButton-primary"] * { color: #fff !important; }
+[data-testid="stRadio"] label p, [data-testid="stCheckbox"] label p { color: var(--ink) !important; }
+
 @media (max-width: 520px) {
     .hero h1 { font-size: 1.5rem; }
     .card { flex-wrap: wrap; }
@@ -253,21 +264,19 @@ def gemini_urun_tani(image, api_key, marka_ipucu="", durum=None):
     foto.save(buffered, format="JPEG", quality=70)
     img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
+    kural = (
+        "Yazı okunmuyorsa görünümden en olası marka ve modeli tahmin et. "
+        "Cevap, Google Shopping'de aratılacak KISA bir ürün adı olsun: marka, ürün "
+        "adı ve ürün türü (en fazla 6 kelime). Hacim, yüzde, miktar ve pazarlama "
+        "ifadelerini ekleme. Açıklama, soru veya özür yazma; tek satır yaz."
+    )
     if marka_ipucu.strip():
-        talimat = (
-            f"Kullanıcı bu ürünün '{marka_ipucu.strip()}' markasına ait olduğunu "
-            "belirtti. Fotoğraftaki ana ürünün tam modelini üzerindeki yazıları "
-            "okuyarak belirle. Yazı okunmuyorsa görünümden en olası marka ve modeli tahmin et. "
-            "Açıklama, soru veya özür yazma; sadece Google Shopping'de aratılacak "
-            "ürün adını tek satır olarak yaz."
-        )
+        talimat = (f"Kullanıcı bu ürünün '{marka_ipucu.strip()}' markasına ait olduğunu "
+                   "belirtti. Fotoğraftaki ana ürünü üzerindeki yazıları okuyarak "
+                   "belirle. " + kural)
     else:
-        talimat = (
-            "Bu fotoğrafta el ile tutulan veya odaklanılan ana ürünün tam marka "
-            "adını ve modelini, üzerindeki yazıları okuyarak belirle. Yazı okunmuyorsa görünümden en olası marka ve "
-            "modeli tahmin et. Açıklama, soru veya özür yazma; sadece Google "
-            "Shopping'de aratılacak ürün adını tek satır olarak yaz."
-        )
+        talimat = ("Bu fotoğrafta el ile tutulan veya odaklanılan ana ürünün marka ve "
+                   "modelini, üzerindeki yazıları okuyarak belirle. " + kural)
 
     son_hata = ""
     son_kod = None
@@ -349,7 +358,7 @@ def gemini_urun_tani(image, api_key, marka_ipucu="", durum=None):
 def fiyatlari_ara(urun_adi, api_key, min_fiyat=0):
     istek = {
         "engine": "google_shopping",
-        "q": urun_adi + " -kılıf -case -kapak",
+        "q": urun_adi,
         "hl": "tr",
         "gl": "tr",
         "api_key": api_key,
@@ -367,30 +376,60 @@ def fiyatlari_ara(urun_adi, api_key, min_fiyat=0):
     except (URLError, TimeoutError):
         raise Exception("SerpApi'ye bağlanılamadı.")
 
-    if sonuc.get("error"):
-        raise Exception(sonuc["error"])
-    return sonuc.get("shopping_results", [])
+    hata = sonuc.get("error")
+    if hata:
+        if "hasn't returned any results" in hata:
+            return []  # Hata değil: bu ifade için sonuç yok
+        raise Exception(hata)
+    return sonuc.get("shopping_results") or sonuc.get("inline_shopping_results") or []
+
+
+def sorgu_adaylari(ad):
+    """Uzun ürün adından, sonuç çıkana dek denenecek daha kısa ifadeler üretir."""
+    temiz = re.sub(r"%\s?\d+(?:[.,]\d+)?|\(.*?\)", " ", ad)
+    temiz = re.sub(r"\b\d[\d.,]*\s?(?:iu|ml|gr?|mg|kg|lt?|adet|cm|mm)\b", " ",
+                   temiz, flags=re.I)
+    kelimeler = temiz.split()
+    adaylar = []
+    for n in (len(kelimeler), 5, 3):
+        q = " ".join(kelimeler[:n]).strip()
+        if q and q not in adaylar:
+            adaylar.append(q)
+    return adaylar or [ad]
 
 
 def fiyatlari_getir(urun_adi, api_key):
-    """İlk aramada çoğunlukla aksesuar geliyorsa, fiyat tabanı koyup bir kez daha arar."""
-    ilk = fiyatlari_ara(urun_adi, api_key)
-    temiz, _ = filtrele(ilk, urun_adi)
-    if len(temiz) >= 3:
-        return ilk
+    """(sonuçlar, kullanılan_sorgu) döner.
+    Sonuç yoksa sorguyu kısaltıp yeniden dener. Sonuçlar aksesuarla doluysa
+    fiyat tabanı koyup bir kez daha arar."""
+    ilk, sorgu = [], urun_adi
+    for aday in sorgu_adaylari(urun_adi):
+        ilk, sorgu = fiyatlari_ara(aday, api_key), aday
+        if ilk:
+            break
+    if not ilk:
+        return [], sorgu
 
+    yasak = [k for k in AKSESUAR_KELIMELERI if k not in normalize(sorgu)]
+    aksesuar = sum(
+        1 for r in ilk
+        if any(re.search(r"\b" + re.escape(k), normalize(r.get("title", "")))
+               for k in yasak)
+    )
+    temiz, _ = filtrele(ilk, sorgu)
     fiyatlar = [float(r["extracted_price"]) for r in ilk if r.get("extracted_price")]
-    if not fiyatlar:
-        return ilk
-    # Gelen sonuçlar ucuz aksesuarsa, asıl ürün bunların birkaç katıdır
-    ikinci = fiyatlari_ara(urun_adi, api_key, min_fiyat=max(fiyatlar) * 2)
+    if len(temiz) >= 3 or aksesuar < len(ilk) * 0.4 or not fiyatlar:
+        return ilk, sorgu
+
+    # Sonuçlar ucuz aksesuarsa, asıl ürün bunların birkaç katıdır
+    ikinci = fiyatlari_ara(sorgu, api_key, min_fiyat=max(fiyatlar) * 2)
     gorulen, birlesik = set(), []
     for r in ilk + ikinci:
         anahtar = (r.get("title"), r.get("source"))
         if anahtar not in gorulen:
             gorulen.add(anahtar)
             birlesik.append(r)
-    return birlesik
+    return birlesik, sorgu
 
 
 def fiyat_goster(x):
@@ -423,7 +462,7 @@ def filtrele(sonuclar, urun_adi):
         if any(re.search(r"\b" + re.escape(k), baslik) for k in yasak):
             continue
         # Model numarası (4, 15 vb.) başlıkta ayrı bir kelime olarak geçmeli
-        sayilar = [t for t in tokenlar if t.isdigit()]
+        sayilar = [t for t in tokenlar if t.isdigit()] if len(tokenlar) <= 4 else []
         if any(n not in baslik.split() for n in sayilar):
             continue
         if tokenlar:
@@ -447,9 +486,9 @@ def filtrele(sonuclar, urun_adi):
 def urun_karti(item, en_ucuz):
     satici = html.escape(item.get("source", "Bilinmeyen satıcı"))
     fiyat = html.escape(str(item.get("price", "-")))
-    baslik = item.get("title", "Ürün")
-    baslik = html.escape(baslik)
-    link = item.get("product_link") or item.get("link")
+    eski = item.get("old_price")
+    baslik = html.escape(item.get("title", "Ürün"))
+    link = item.get("link") or item.get("product_link")
     thumb = item.get("thumbnail")
 
     gorsel = (f'<img src="{html.escape(thumb)}" alt="">' if thumb
@@ -458,12 +497,23 @@ def urun_karti(item, en_ucuz):
              f'rel="noopener noreferrer">Mağazaya git</a>') if link else ""
     rozet = '<span class="badge">En ucuz</span>' if en_ucuz else ""
     sinif = "card best" if en_ucuz else "card"
+    eski_html = f'<s class="old">{html.escape(str(eski))}</s>' if eski else ""
+
+    meta = []
+    puan, yorum = item.get("rating"), item.get("reviews")
+    if puan:
+        sayi = f" ({int(yorum):,})".replace(",", ".") if isinstance(yorum, (int, float)) and yorum else ""
+        meta.append(f"<span>⭐ {puan}{sayi}</span>")
+    teslimat = item.get("delivery")
+    if teslimat:
+        meta.append(f"<span>{html.escape(str(teslimat))}</span>")
+    meta_html = f'<div class="meta">{"".join(meta)}</div>' if meta else ""
 
     st.markdown(
         f'<div class="{sinif}">{rozet}{gorsel}'
-        f'<div class="info"><div class="price">{fiyat}</div>'
+        f'<div class="info"><div class="price">{fiyat}{eski_html}</div>'
         f'<div class="store">{satici}</div>'
-        f'<div class="title" title="{baslik}">{baslik}</div></div>{buton}</div>',
+        f'<div class="title" title="{baslik}">{baslik}</div>{meta_html}</div>{buton}</div>',
         unsafe_allow_html=True,
     )
 
@@ -516,17 +566,22 @@ if kaynak is not None:
                  use_container_width=True):
         st.session_state.pop("sonuclar", None)
 
-        with st.status("Ürün tanınıyor…", expanded=True) as durum_kutusu:
-            try:
-                st.session_state["urun_adi"] = gemini_urun_tani(
-                    image, GEMINI_API_KEY, girilen_marka,
-                    durum=lambda m: st.write(m),
-                )
-                durum_kutusu.update(label="Ürün tanındı", state="complete", expanded=False)
-            except Exception as ex:
-                durum_kutusu.update(label="Ürün tanınamadı", state="error")
-                st.error(str(ex))
-                st.stop()
+        anahtar = hashlib.md5(
+            kaynak.getvalue() + girilen_marka.strip().encode("utf-8")
+        ).hexdigest()
+        if st.session_state.get("tani_anahtar") != anahtar:
+            with st.status("Ürün tanınıyor…", expanded=True) as durum_kutusu:
+                try:
+                    st.session_state["urun_adi"] = gemini_urun_tani(
+                        image, GEMINI_API_KEY, girilen_marka,
+                        durum=lambda m: st.write(m),
+                    )
+                    st.session_state["tani_anahtar"] = anahtar
+                    durum_kutusu.update(label="Ürün tanındı", state="complete", expanded=False)
+                except Exception as ex:
+                    durum_kutusu.update(label="Ürün tanınamadı", state="error")
+                    st.error(str(ex))
+                    st.stop()
 
     # Algılanan ad düzenlenebilir: yanlışsa kullanıcı düzeltip yeniden arayabilir
     if "urun_adi" in st.session_state:
@@ -538,17 +593,18 @@ if kaynak is not None:
         duzeltilmis = st.text_input(
             "Yanlışsa ürün adını düzelt",
             value=st.session_state["urun_adi"],
-            key="urun_adi_duzenle",
+            key="urun_adi_duzenle_" + hashlib.md5(
+                st.session_state["urun_adi"].encode("utf-8")).hexdigest()[:8],  # yeni ürün gelince alan sıfırlansın
         )
 
         if st.button("Fiyatları ara", use_container_width=True) or \
                 "sonuclar" not in st.session_state:
             with st.spinner("Fiyatlar toplanıyor…"):
                 try:
-                    st.session_state["sonuclar"] = fiyatlari_getir(
+                    (st.session_state["sonuclar"],
+                     st.session_state["aranan"]) = fiyatlari_getir(
                         duzeltilmis.strip(), SERPAPI_KEY
                     )
-                    st.session_state["aranan"] = duzeltilmis.strip()
                 except Exception as ex:
                     st.error(f"Fiyat arama hatası: {ex}")
                     st.stop()
@@ -563,20 +619,29 @@ if sonuclar is not None:
     else:
         elenen = 0
         if st.checkbox("Kılıf ve aksesuarları gizle", value=True):
-            sonuclar, elenen = filtrele(sonuclar, st.session_state.get("aranan", ""))
-        if not sonuclar:
-            st.warning("Filtre sonrası sonuç kalmadı. Filtreyi kapat veya ürün adını düzelt.")
-            st.stop()
+            temiz, elenen = filtrele(sonuclar, st.session_state.get("aranan", ""))
+            if temiz:
+                sonuclar = temiz
+            else:
+                elenen = 0
+                st.caption("Filtre tüm sonuçları eledi, filtresiz sonuçlar gösteriliyor.")
         if elenen:
             st.caption(f"{elenen} alakasız sonuç (kılıf, aksesuar vb.) gizlendi.")
+        st.caption(f"Aranan: {st.session_state.get('aranan', '')}")
 
-        liste = [r for r in sonuclar if r.get("extracted_price")]
-        liste.sort(key=lambda r: float(r["extracted_price"]))
-        liste = (liste or sonuclar)[:10]
+        siralama = st.radio("Sırala", ["En ucuz", "En yüksek puan"],
+                            horizontal=True, label_visibility="collapsed")
 
-        if liste and liste[0].get("extracted_price"):
-            fiyatlar = [float(r["extracted_price"]) for r in liste
-                        if r.get("extracted_price")]
+        def fiyat_of(r):
+            return float(r.get("extracted_price") or 1e12)
+
+        liste = sorted(sonuclar, key=fiyat_of)
+        fiyatlar = [fiyat_of(r) for r in liste if r.get("extracted_price")]
+        ucuz = liste[0] if fiyatlar else None
+        if siralama == "En yüksek puan":
+            liste = sorted(liste, key=lambda r: (-(r.get("rating") or 0), fiyat_of(r)))
+
+        if fiyatlar:
             st.markdown(
                 '<div class="stats">'
                 f'<div class="stat best"><span>En düşük</span><b>{fiyat_goster(min(fiyatlar))}</b></div>'
@@ -585,10 +650,10 @@ if sonuclar is not None:
                 '</div>',
                 unsafe_allow_html=True,
             )
-            st.caption(f"{len(fiyatlar)} mağazadaki fiyatlara göre, ucuzdan pahalıya.")
+            st.caption(f"{len(fiyatlar)} fiyata göre hesaplandı.")
 
-        for i, item in enumerate(liste):
-            urun_karti(item, en_ucuz=(i == 0 and bool(item.get("extracted_price"))))
+        for item in liste[:10]:
+            urun_karti(item, en_ucuz=(item is ucuz))
 
 st.markdown(
     "<p style='text-align:center;color:#66726D;font-size:.8rem;margin-top:2rem'>"
