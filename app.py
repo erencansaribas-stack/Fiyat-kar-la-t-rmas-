@@ -276,7 +276,8 @@ def gemini_urun_tani(image, api_key, marka_ipucu="", durum=None):
     kural = (
         "Yazı okunmuyorsa görünümden en olası marka ve modeli tahmin et. "
         "Cevap, Google Shopping'de aratılacak KISA bir ürün adı olsun: marka, ürün "
-        "adı ve ürün türü (en fazla 6 kelime). Hacim, yüzde, miktar ve pazarlama "
+        "adı, AYIRT EDİCİ ürün türü (örn. kapsüllü espresso makinesi, Türk kahvesi "
+        "makinesi, filtre kahve makinesi) ve renk (en fazla 7 kelime). Hacim, yüzde, miktar ve pazarlama "
         "ifadelerini ekleme. Açıklama, soru veya özür yazma; tek satır yaz."
     )
     if marka_ipucu.strip():
@@ -393,25 +394,35 @@ def fiyatlari_ara(urun_adi, api_key, min_fiyat=0):
     return sonuc.get("shopping_results") or sonuc.get("inline_shopping_results") or []
 
 
-def gorsel_yukle(image, api_key):
-    """Fotoğrafı 10 dakika sonra kendini silen geçici bir bağlantıya yükler."""
+def gorsel_yukle(image, api_key=None):
+    """Fotoğrafı geçici, herkese açık bir bağlantıya yükler.
+    imgbb anahtarı varsa 10 dk, yoksa anahtarsız Litterbox ile 1 saat sonra silinir."""
     foto = image.copy()
     foto.thumbnail((1000, 1000))
     buf = io.BytesIO()
     foto.save(buf, format="JPEG", quality=85)
-    govde = urlencode({"image": base64.b64encode(buf.getvalue()).decode("utf-8")})
-    req = Request(
-        "https://api.imgbb.com/1/upload?" + urlencode({"key": api_key, "expiration": 600}),
-        data=govde.encode("utf-8"), method="POST",
-    )
     try:
-        with urlopen(req, timeout=30) as r:
-            veri = json.loads(r.read().decode("utf-8"))
+        if api_key:
+            govde = urlencode({"image": base64.b64encode(buf.getvalue()).decode("utf-8")})
+            req = Request(
+                "https://api.imgbb.com/1/upload?" + urlencode({"key": api_key, "expiration": 600}),
+                data=govde.encode("utf-8"), method="POST",
+            )
+            with urlopen(req, timeout=30) as r:
+                url = (json.loads(r.read().decode("utf-8")).get("data") or {}).get("url")
+        else:
+            import requests  # Streamlit ile birlikte kurulur
+            r = requests.post(
+                "https://litterbox.catbox.moe/resources/internals/api.php",
+                data={"reqtype": "fileupload", "time": "1h"},
+                files={"fileToUpload": ("urun.jpg", buf.getvalue(), "image/jpeg")},
+                timeout=30,
+            )
+            url = r.text.strip() if r.ok and r.text.strip().startswith("http") else None
     except HTTPError as ex:
         raise Exception(f"Fotoğraf yüklenemedi (imgbb {ex.code}). IMGBB_KEY'i kontrol et.")
-    except (URLError, TimeoutError):
+    except Exception:
         raise Exception("Fotoğraf yükleme servisine bağlanılamadı.")
-    url = (veri.get("data") or {}).get("url")
     if not url:
         raise Exception("Fotoğraf yüklenemedi.")
     return url
@@ -733,22 +744,17 @@ if kaynak is not None:
         "Arama yöntemi",
         ["Fotoğrafla birebir ara", "Ürün adıyla ara"],
         horizontal=True,
-        index=0 if IMGBB_KEY else 1,
         help="Birebir arama Google Lens kullanır; markasız ürünlerde aynısını bulur.",
     )
-    if yontem.startswith("Fotoğrafla") and not IMGBB_KEY:
-        st.info("Birebir arama için Secrets'a IMGBB_KEY ekle (ücretsiz: api.imgbb.com). "
-                "Şimdilik ürün adıyla aranacak.")
-
     if st.button("Ürünü bul ve fiyatları getir", type="primary",
                  use_container_width=True):
         st.session_state.pop("sonuclar", None)
 
         st.session_state["mod"] = "isim"
-        if yontem.startswith("Fotoğrafla") and IMGBB_KEY:
+        if yontem.startswith("Fotoğrafla"):
             with st.status("Fotoğraf görsel olarak aranıyor…", expanded=True) as d:
                 try:
-                    st.write("Fotoğraf geçici olarak yükleniyor (10 dk sonra silinir)…")
+                    st.write("Fotoğraf geçici olarak yükleniyor (en geç 1 saat sonra silinir)…")
                     foto_url = gorsel_yukle(image, IMGBB_KEY)
                     st.write("Google Lens eşleşen ürünleri arıyor…")
                     bulunan = lens_ara(foto_url, SERPAPI_KEY)
@@ -805,12 +811,17 @@ if kaynak is not None:
 
         if st.button("Fiyatları ara", use_container_width=True) or \
                 "sonuclar" not in st.session_state:
-            with st.spinner("Fiyatlar toplanıyor…"):
+            with st.spinner("Fiyatlar toplanıyor ve fotoğrafla karşılaştırılıyor…"):
                 try:
-                    (st.session_state["sonuclar"],
-                     st.session_state["aranan"]) = fiyatlari_getir(
-                        duzeltilmis.strip(), SERPAPI_KEY
-                    )
+                    sonuc, sorgu = fiyatlari_getir(duzeltilmis.strip(), SERPAPI_KEY)
+                    temiz, _ = filtrele(sonuc, sorgu)
+                    adaylar = (temiz or sonuc)[:12]
+                    try:
+                        eslestir(image, adaylar, GEMINI_API_KEY)
+                    except Exception:
+                        pass  # Doğrulama olmasa da sonuçlar gösterilir
+                    st.session_state["sonuclar"] = adaylar
+                    st.session_state["aranan"] = sorgu
                 except Exception as ex:
                     st.error(f"Fiyat arama hatası: {ex}")
                     st.stop()
@@ -834,25 +845,24 @@ if sonuclar is not None:
                 st.caption("Filtre tüm sonuçları eledi, filtresiz sonuçlar gösteriliyor.")
         if elenen:
             st.caption(f"{elenen} alakasız sonuç (kılıf, aksesuar vb.) gizlendi.")
-        if mod == "gorsel":
-            dogrulanan = [r for r in sonuclar if r.get("eslesme") is not None]
-            if dogrulanan:
-                ayni = [r for r in dogrulanan if r["eslesme"] >= 7]
-                if st.checkbox("Benzer ürünleri de göster", value=False):
-                    sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])
-                    st.caption("Fotoğraftaki ürünün aynısı ve benzerleri.")
-                elif ayni:
-                    sonuclar = sorted(ayni, key=lambda r: -r["eslesme"])
-                    st.caption(f"Fotoğraftaki ürünün aynısı olarak doğrulanan {len(ayni)} sonuç.")
-                else:
-                    sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])[:3]
-                    st.caption("Birebir aynısı bulunamadı, en yakın ürünler gösteriliyor.")
-            else:
-                st.caption("Eşleşme doğrulanamadı, görsel olarak benzer ürünler gösteriliyor.")
-            secenekler = ["En ucuz", "Benzerlik", "En yüksek puan"]
-        else:
+        dogrulanan = [r for r in sonuclar if r.get("eslesme") is not None]
+        if mod == "isim":
             st.caption(f"Aranan: {st.session_state.get('aranan', '')}")
-            secenekler = ["En ucuz", "En yüksek puan"]
+        if dogrulanan:
+            ayni = [r for r in dogrulanan if r["eslesme"] >= 7]
+            if st.checkbox("Benzer ürünleri de göster", value=False):
+                sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])
+                st.caption("Fotoğraftaki ürünün aynısı ve benzerleri.")
+            elif ayni:
+                sonuclar = sorted(ayni, key=lambda r: -r["eslesme"])
+                st.caption(f"Fotoğraftaki ürünün aynısı olarak doğrulanan {len(ayni)} sonuç.")
+            else:
+                sonuclar = sorted(dogrulanan, key=lambda r: -r["eslesme"])[:3]
+                st.caption("Birebir aynısı bulunamadı, en yakın ürünler gösteriliyor.")
+        elif mod == "gorsel":
+            st.caption("Eşleşme doğrulanamadı, görsel olarak benzer ürünler gösteriliyor.")
+        secenekler = (["En ucuz", "Benzerlik", "En yüksek puan"] if mod == "gorsel"
+                      else ["En ucuz", "En yüksek puan"])
         siralama = st.radio("Sırala", secenekler, horizontal=True,
                             label_visibility="collapsed")
 
@@ -887,4 +897,3 @@ st.markdown(
     "Görselden fiyat karşılaştırma asistanı</p>",
     unsafe_allow_html=True,
 )
-
