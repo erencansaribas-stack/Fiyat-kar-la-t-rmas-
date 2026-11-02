@@ -3,188 +3,173 @@ import json
 import base64
 import io
 import time
+import random
+import html
 from urllib.request import Request, urlopen
 from urllib.parse import urlencode
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from PIL import Image
 
 # ---------------------------------
-# SAYFA AYARLARI VE ÖZEL TASARIM
+# SAYFA AYARLARI
 # ---------------------------------
 st.set_page_config(
     page_title="Akıllı Alışveriş Asistanı",
     page_icon="🛍️",
-    layout="centered"
+    layout="centered",
 )
 
-st.markdown("""
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    .stButton>button {
-        border-radius: 20px;
-        font-weight: bold;
-        transition: 0.3s;
-    }
-    .stButton>button:hover {
-        transform: scale(1.02);
-    }
-    .stTextInput>div>div>input {
-        border-radius: 10px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
 # ---------------------------------
-# FONKSİYONLAR
-# ---------------------------------
-def gemini_urun_tani(image, marka_ipucu=""):
-    buffered = io.BytesIO()
-    image.save(buffered, format="JPEG", quality=90)
-    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-    modeller = [
-        "gemini-3.8-flash", 
-        "gemini-1.5-flash-latest", 
-        "gemini-1.5-flash"
-    ]
-
-    if marka_ipucu.strip():
-        talimat = (
-            f"Kullanıcı bu ürünün '{marka_ipucu}' markasına ait "
-            "olduğunu belirtti. Bu bilgi ışığında, fotoğrafta "
-            "el ile tutulan ana ürünün tam modelini sadece kutu "
-            "üzerindeki yazıları harfi harfine okuyarak belirle. "
-            "Sadece Google Shopping üzerinde aratılacak en doğru "
-            "ve net ürün adını tek bir satır halinde yaz."
-        )
-    else:
-        talimat = (
-            "Bu fotoğrafta el ile tutulan veya odaklanılan ana "
-            "ürünün tam marka adını ve modelini, sadece kutu "
-            "üzerindeki yazıları harfi harfine okuyarak belirle. "
-            "Asla yorum yapma veya kategori uydurma. Sadece "
-            "Google Shopping üzerinde aratılacak en doğru ve net "
-            "ürün adını tek bir satır halinde yaz."
-        )
-
-    data = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": talimat}, 
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg", 
-                            "data": img_str
-                        }
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.1, 
-            "maxOutputTokens": 150
-        }
-    }
-
-    son_hata = None
-
-    for model_adi in modeller:
-        url = (
-            "https://generativelanguage.googleapis.com/"
-            f"v1beta/models/{model_adi}:generateContent"
-        )
-        
-        for deneme in range(3):
-            req_headers = {
-                "Content-Type": "application/json", 
-                "x-goog-api-key": GEMINI_API_KEY
-            }
-            
-            req = Request(
-                url, 
-                data=json.dumps(data).encode("utf-8"),
-                headers=req_headers, 
-                method="POST"
-            )
-            
-            try:
-                with urlopen(req, timeout=60) as response:
-                    sonuc = json.loads(response.read().decode("utf-8"))
-                
-                urun_adi = sonuc["candidates"][0]["content"]["parts"][0]["text"].strip()
-                if urun_adi: 
-                    return urun_adi
-                    
-            except HTTPError as ex:
-                son_hata = ex
-                if ex.code in [503, 429]: 
-                    time.sleep(2)
-                    continue
-                else: 
-                    break  
-            except Exception as ex:
-                son_hata = ex
-                break
-
-    if isinstance(son_hata, HTTPError):
-        raise Exception(f"Gemini HTTP {son_hata.code}: Sunucu yoğun, tekrar dene.")
-    else:
-        raise Exception(f"Gemini bağlantı hatası: {son_hata}")
-
-
-def fiyatlari_ara(urun_adi):
-    params = urlencode({
-        "engine": "google_shopping", 
-        "q": urun_adi, 
-        "hl": "tr", 
-        "gl": "tr", 
-        "api_key": SERPAPI_KEY
-    })
-    
-    search_url = "https://serpapi.com/search.json?" + params
-    
-    req_headers = {"User-Agent": "Mozilla/5.0"}
-    req = Request(search_url, headers=req_headers)
-    
-    try:
-        with urlopen(req, timeout=45) as response:
-            sonuc = json.loads(response.read().decode("utf-8"))
-            
-        if sonuc.get("error"): 
-            raise Exception(sonuc["error"])
-            
-        return sonuc.get("shopping_results", [])
-        
-    except HTTPError as ex:
-        raise Exception(f"SerpApi Hatası {ex.code}")
-
-# ---------------------------------
-# ANA EKRAN VE GİRİŞ (UI)
+# TASARIM
 # ---------------------------------
 st.markdown(
-    "<div style='text-align: center; padding: 15px; "
-    "background-color: #FF4B4B; border-radius: 15px; "
-    "margin-bottom: 20px; color: white;'>"
-    "<h1 style='margin: 0px; color: white;'>🛍️ Alışveriş Asistanı</h1>"
-    "<p style='margin: 5px 0px 0px 0px; font-size: 16px;'>"
-    "Ürünün fotoğrafını çek, en ucuzunu bulalım.</p></div>", 
-    unsafe_allow_html=True
+    """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&display=swap');
+
+:root {
+    --bg: #F6F7F4;
+    --ink: #14201C;
+    --muted: #66726D;
+    --line: #E1E6E2;
+    --brand: #0F6B57;
+    --brand-dark: #0A4F40;
+    --gold: #F2B84B;
+}
+
+html, body, [class*="css"], .stApp {
+    font-family: 'Manrope', sans-serif;
+    color: var(--ink);
+}
+.stApp { background: var(--bg); }
+
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding-top: 1.5rem; max-width: 760px; }
+
+/* Üst başlık */
+.hero {
+    background: var(--brand);
+    color: #fff;
+    border-radius: 22px;
+    padding: 28px 26px;
+    margin-bottom: 22px;
+}
+.hero h1 {
+    margin: 0;
+    font-size: 1.9rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    color: #fff;
+}
+.hero p { margin: 6px 0 0 0; opacity: .85; font-size: 1rem; }
+
+/* Girişler */
+.stTextInput input {
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: #fff;
+}
+.stTextInput input:focus { border-color: var(--brand); box-shadow: 0 0 0 1px var(--brand); }
+[data-testid="stFileUploader"] section {
+    border-radius: 14px;
+    border: 1.5px dashed #B9C4BE;
+    background: #fff;
+}
+
+/* Butonlar */
+.stButton > button[kind="primary"] {
+    background: var(--brand);
+    border: none;
+    border-radius: 14px;
+    font-weight: 700;
+    padding: 0.7rem 1rem;
+}
+.stButton > button[kind="primary"]:hover { background: var(--brand-dark); }
+.stButton > button:focus-visible { outline: 3px solid var(--gold); }
+
+/* Algılanan ürün */
+.detected {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-left: 5px solid var(--brand);
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin: 14px 0;
+}
+.detected small { color: var(--muted); display: block; margin-bottom: 2px; }
+.detected b { font-size: 1.1rem; }
+
+/* Özet */
+.stats { display: flex; gap: 10px; margin: 8px 0 18px 0; }
+.stat {
+    flex: 1;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 14px;
+}
+.stat span { display: block; color: var(--muted); font-size: .78rem; }
+.stat b { font-size: 1.15rem; }
+.stat.best { background: var(--brand); border-color: var(--brand); color: #fff; }
+.stat.best span { color: #CFE6DF; }
+
+/* Ürün kartı */
+.card {
+    position: relative;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 12px;
+    margin-bottom: 10px;
+}
+.card.best { border: 2px solid var(--brand); }
+.card img {
+    width: 84px; height: 84px;
+    object-fit: contain;
+    border-radius: 10px;
+    background: #fff;
+    flex-shrink: 0;
+}
+.card .noimg {
+    width: 84px; height: 84px; border-radius: 10px;
+    background: var(--bg); display: flex;
+    align-items: center; justify-content: center;
+    font-size: 1.6rem; flex-shrink: 0;
+}
+.card .info { flex: 1; min-width: 0; }
+.card .price { font-size: 1.25rem; font-weight: 800; color: var(--brand); }
+.card .store { font-weight: 700; font-size: .92rem; }
+.card .title {
+    color: var(--muted); font-size: .82rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card a.go {
+    background: var(--ink); color: #fff !important;
+    text-decoration: none; font-weight: 700; font-size: .85rem;
+    padding: 10px 14px; border-radius: 10px; white-space: nowrap;
+}
+.card a.go:hover { background: var(--brand); }
+.badge {
+    position: absolute; top: -10px; left: 14px;
+    background: var(--gold); color: var(--ink);
+    font-size: .72rem; font-weight: 800;
+    padding: 3px 10px; border-radius: 999px;
+}
+
+@media (max-width: 520px) {
+    .hero h1 { font-size: 1.5rem; }
+    .card { flex-wrap: wrap; }
+    .card a.go { width: 100%; text-align: center; box-sizing: border-box; }
+    .stats { flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+""",
+    unsafe_allow_html=True,
 )
-
-kullanici_adi = st.text_input(
-    "👤 Asistanı kullanmak için adını gir:", 
-    placeholder="Örn: Eren Can"
-)
-
-if not kullanici_adi:
-    st.info("👆 Uygulamaya giriş yapmak için adını yaz ve 'Enter'a bas.")
-    st.stop()
-
-st.success(f"🎉 Harika! Hoş geldin **{kullanici_adi}**. Hadi başlayalım!")
-st.markdown("---")
 
 # ---------------------------------
 # API ANAHTARLARI
@@ -193,94 +178,283 @@ try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     SERPAPI_KEY = st.secrets["SERPAPI_KEY"]
 except Exception:
-    st.error("API anahtarları (Secrets) bulunamadı!")
+    st.error("API anahtarları bulunamadı. `.streamlit/secrets.toml` dosyasına "
+             "GEMINI_API_KEY ve SERPAPI_KEY ekle.")
     st.stop()
 
 # ---------------------------------
-# İPUCU VE FOTOĞRAF YÜKLEME 
+# FONKSİYONLAR
 # ---------------------------------
-col1, col2 = st.columns([1, 1])
-with col1:
-    st.markdown("### 🏷️ Marka (Opsiyonel)")
-    girilen_marka = st.text_input(
-        "Markayı biliyorsan yaz (Hızlandırır):", 
-        placeholder="Örn: Ceel, Apple..."
-    )
-with col2:
-    st.markdown("### 📤 Fotoğraf")
-    yuklenen_foto = st.file_uploader(
-        "Kutusu okunan fotoğraf seç:", 
-        type=["jpg", "jpeg", "png"], 
-        label_visibility="collapsed"
+# Eski gemini-1.5 modelleri kapatıldı. Biri yoğunsa sıradakine geçilir.
+MODELLER = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+]
+GECICI_HATALAR = {429, 500, 502, 503, 504}
+DENEME_SAYISI = 4
+
+
+def _hata_mesaji(ex):
+    """HTTPError gövdesinden okunabilir bir mesaj çıkarır."""
+    try:
+        govde = json.loads(ex.read().decode("utf-8"))
+        return govde.get("error", {}).get("message", "")
+    except Exception:
+        return ""
+
+
+def gemini_urun_tani(image, api_key, marka_ipucu=""):
+    foto = image.copy()  # Orijinal görsel bozulmasın
+    foto.thumbnail((800, 800))
+    buffered = io.BytesIO()
+    foto.save(buffered, format="JPEG", quality=70)
+    img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    if marka_ipucu.strip():
+        talimat = (
+            f"Kullanıcı bu ürünün '{marka_ipucu.strip()}' markasına ait olduğunu "
+            "belirtti. Fotoğraftaki ana ürünün tam modelini üzerindeki yazıları "
+            "okuyarak belirle. Yorum yapma. Sadece Google Shopping'de aratılacak "
+            "en doğru ve net ürün adını tek satır olarak yaz."
+        )
+    else:
+        talimat = (
+            "Bu fotoğrafta el ile tutulan veya odaklanılan ana ürünün tam marka "
+            "adını ve modelini, üzerindeki yazıları okuyarak belirle. Yorum yapma. "
+            "Sadece Google Shopping'de aratılacak en doğru ve net ürün adını "
+            "tek satır olarak yaz."
+        )
+
+    son_hata = ""
+    son_kod = None
+
+    for model_adi in MODELLER:
+        gen_config = {"temperature": 0.1, "maxOutputTokens": 120}
+        if model_adi.startswith("gemini-2.5"):
+            gen_config["thinkingConfig"] = {"thinkingBudget": 0}  # Hızlı yanıt
+
+        data = {
+            "contents": [{
+                "parts": [
+                    {"text": talimat},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": img_str}},
+                ]
+            }],
+            "generationConfig": gen_config,
+        }
+        url = ("https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model_adi}:generateContent")
+
+        for deneme in range(DENEME_SAYISI):
+            req = Request(
+                url,
+                data=json.dumps(data).encode("utf-8"),
+                headers={"Content-Type": "application/json",
+                         "x-goog-api-key": api_key},
+                method="POST",
+            )
+            try:
+                with urlopen(req, timeout=40) as response:
+                    sonuc = json.loads(response.read().decode("utf-8"))
+                parcalar = sonuc["candidates"][0]["content"]["parts"]
+                metin = "".join(p.get("text", "") for p in parcalar).strip()
+                if metin:
+                    return metin.splitlines()[0].strip(" *`\"'")
+                son_hata = "Model boş yanıt döndürdü."
+                break  # Boş yanıtta sıradaki modeli dene
+
+            except HTTPError as ex:
+                son_kod = ex.code
+                son_hata = _hata_mesaji(ex)
+                if ex.code in GECICI_HATALAR:
+                    # Üstel bekleme: ~1.5s, 3s, 6s (+ rastgele sapma)
+                    time.sleep(1.5 * (2 ** deneme) + random.uniform(0, 0.7))
+                    continue
+                break  # 400/403/404: bu modelde tekrar denemenin anlamı yok
+
+            except (URLError, TimeoutError) as ex:
+                son_hata = str(ex)
+                time.sleep(1.5 * (deneme + 1))
+                continue
+
+            except (KeyError, IndexError, json.JSONDecodeError) as ex:
+                son_hata = f"Beklenmeyen yanıt biçimi: {ex}"
+                break
+
+    if son_kod in (401, 403) or (son_kod == 400 and "API key" in son_hata):
+        raise Exception("Gemini API anahtarı geçersiz veya yetkisiz. Anahtarı kontrol et.")
+    if son_kod == 429:
+        raise Exception("Gemini kullanım kotası doldu. Biraz bekleyip tekrar dene.")
+    if son_kod in GECICI_HATALAR:
+        raise Exception("Gemini sunucuları şu an çok yoğun. Tüm modeller denendi; "
+                        "1-2 dakika sonra tekrar dene.")
+    raise Exception(f"Gemini hatası ({son_kod or 'bağlantı'}): {son_hata}")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fiyatlari_ara(urun_adi, api_key):
+    params = urlencode({
+        "engine": "google_shopping",
+        "q": urun_adi,
+        "hl": "tr",
+        "gl": "tr",
+        "api_key": api_key,
+    })
+    req = Request("https://serpapi.com/search.json?" + params,
+                  headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urlopen(req, timeout=30) as response:
+            sonuc = json.loads(response.read().decode("utf-8"))
+    except HTTPError as ex:
+        raise Exception(f"SerpApi hatası {ex.code}")
+    except (URLError, TimeoutError):
+        raise Exception("SerpApi'ye bağlanılamadı.")
+
+    if sonuc.get("error"):
+        raise Exception(sonuc["error"])
+    return sonuc.get("shopping_results", [])
+
+
+def fiyat_goster(x):
+    return f"{x:,.2f} TL".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def urun_karti(item, en_ucuz):
+    satici = html.escape(item.get("source", "Bilinmeyen satıcı"))
+    fiyat = html.escape(str(item.get("price", "-")))
+    baslik = item.get("title", "Ürün")
+    baslik = html.escape(baslik)
+    link = item.get("product_link") or item.get("link")
+    thumb = item.get("thumbnail")
+
+    gorsel = (f'<img src="{html.escape(thumb)}" alt="">' if thumb
+              else '<div class="noimg">🛍️</div>')
+    buton = (f'<a class="go" href="{html.escape(link)}" target="_blank" '
+             f'rel="noopener noreferrer">Mağazaya git</a>') if link else ""
+    rozet = '<span class="badge">En ucuz</span>' if en_ucuz else ""
+    sinif = "card best" if en_ucuz else "card"
+
+    st.markdown(
+        f'<div class="{sinif}">{rozet}{gorsel}'
+        f'<div class="info"><div class="price">{fiyat}</div>'
+        f'<div class="store">{satici}</div>'
+        f'<div class="title" title="{baslik}">{baslik}</div></div>{buton}</div>',
+        unsafe_allow_html=True,
     )
 
-if yuklenen_foto is not None:
+
+# ---------------------------------
+# BAŞLIK VE GİRİŞ
+# ---------------------------------
+st.markdown(
+    '<div class="hero"><h1>🛍️ Alışveriş Asistanı</h1>'
+    '<p>Ürünün fotoğrafını yükle, en uygun fiyatı bulalım.</p></div>',
+    unsafe_allow_html=True,
+)
+
+kullanici_adi = st.text_input("Adın", placeholder="Örn: Eren Can")
+if not kullanici_adi.strip():
+    st.info("Başlamak için adını yaz ve Enter'a bas.")
+    st.stop()
+
+st.markdown(f"Merhaba **{html.escape(kullanici_adi.strip())}** 👋")
+
+# ---------------------------------
+# FOTOĞRAF VE MARKA
+# ---------------------------------
+girilen_marka = st.text_input(
+    "Marka (isteğe bağlı)",
+    placeholder="Örn: Zara, Ceel…",
+    help="Markayı yazarsan tanıma daha hızlı ve doğru olur.",
+)
+
+sekme_yukle, sekme_kamera = st.tabs(["📤 Fotoğraf yükle", "📷 Kamera"])
+with sekme_yukle:
+    yuklenen = st.file_uploader(
+        "Fotoğraf seç", type=["jpg", "jpeg", "png"], label_visibility="collapsed"
+    )
+with sekme_kamera:
+    cekilen = st.camera_input("Ürünün fotoğrafını çek", label_visibility="collapsed")
+
+kaynak = yuklenen or cekilen
+
+if kaynak is not None:
     try:
-        image = Image.open(yuklenen_foto).convert("RGB")
-        st.image(image, caption="📸 Yüklediğin Fotoğraf", use_container_width=True)
+        image = Image.open(kaynak).convert("RGB")
     except Exception as ex:
         st.error(f"Fotoğraf okunamadı: {ex}")
         st.stop()
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("🚀 Ürünü Tanı ve Fiyatları Getir", type="primary", use_container_width=True):
-        
-        with st.spinner("🧠 Yapay zeka ürünü inceliyor..."):
+    st.image(image, use_container_width=True)
+
+    if st.button("Ürünü tanı ve fiyatları getir", type="primary",
+                 use_container_width=True):
+        st.session_state.pop("sonuclar", None)
+
+        with st.spinner("Ürün tanınıyor… Sunucu yoğunsa birkaç deneme yapılabilir."):
             try:
-                urun_adi = gemini_urun_tani(image, girilen_marka)
-                st.success(f"🎯 **Yapay Zeka Tespit Etti:** {urun_adi}")
-            except Exception as ex:
-                st.error(f"Analiz hatası: {ex}")
-                st.stop()
-
-        with st.spinner("🌐 İnternetten fiyatlar toplanıyor..."):
-            try:
-                shopping_results = fiyatlari_ara(urun_adi)
-            except Exception as ex:
-                st.error(f"Fiyat arama hatası: {ex}")
-                st.stop()
-
-        if shopping_results:
-            st.markdown("### 🛒 En İyi Fiyatlar")
-            fiyatlar = []
-            
-            satirlar = [shopping_results[i:i+2] for i in range(0, min(10, len(shopping_results)), 2)]
-            
-            for satir in satirlar:
-                cols = st.columns(2)
-                for idx, item in enumerate(satir):
-                    satici = item.get("source", "Bilinmeyen Satıcı")
-                    fiyat = item.get("price", "-")
-                    baslik = item.get("title", "Ürün")[:50] + "..." 
-                    link = item.get("link")
-                    extracted_price = item.get("extracted_price")
-                    
-                    if extracted_price: 
-                        fiyatlar.append(float(extracted_price))
-
-                    with cols[idx]:
-                        with st.container(border=True):
-                            st.markdown(f"<h4 style='text-align: center; color: #FF4B4B;'>{fiyat}</h4>", unsafe_allow_html=True)
-                            st.markdown(f"**🏪 {satici}**")
-                            st.caption(f"{baslik}")
-                            if link:
-                                st.link_button("Mağazaya Git 🔗", link, use_container_width=True)
-
-            if fiyatlar:
-                ortalama = sum(fiyatlar) / len(fiyatlar)
-                st.markdown("---")
-                st.markdown("### 📊 Hızlı Piyasa Analizi")
-                st.info(
-                    f"💡 Bulunan **{len(fiyatlar)}** mağazaya göre "
-                    f"ortalama fiyat **{ortalama:,.2f} TL** civarında."
+                st.session_state["urun_adi"] = gemini_urun_tani(
+                    image, GEMINI_API_KEY, girilen_marka
                 )
-            else:
-                st.warning("Ürünler bulundu ancak fiyat rakamları çekilemedi.")
-        else:
-            st.warning("Bu ürün için doğrudan satış sonucu bulunamadı.")
+            except Exception as ex:
+                st.error(str(ex))
+                st.stop()
+
+    # Algılanan ad düzenlenebilir: yanlışsa kullanıcı düzeltip yeniden arayabilir
+    if "urun_adi" in st.session_state:
+        st.markdown(
+            f'<div class="detected"><small>Tanınan ürün</small>'
+            f'<b>{html.escape(st.session_state["urun_adi"])}</b></div>',
+            unsafe_allow_html=True,
+        )
+        duzeltilmis = st.text_input(
+            "Yanlışsa ürün adını düzelt",
+            value=st.session_state["urun_adi"],
+            key="urun_adi_duzenle",
+        )
+
+        if st.button("Fiyatları ara", use_container_width=True) or \
+                "sonuclar" not in st.session_state:
+            with st.spinner("Fiyatlar toplanıyor…"):
+                try:
+                    st.session_state["sonuclar"] = fiyatlari_ara(
+                        duzeltilmis.strip(), SERPAPI_KEY
+                    )
+                except Exception as ex:
+                    st.error(f"Fiyat arama hatası: {ex}")
+                    st.stop()
+
+# ---------------------------------
+# SONUÇLAR
+# ---------------------------------
+sonuclar = st.session_state.get("sonuclar")
+if sonuclar is not None:
+    if not sonuclar:
+        st.warning("Bu ürün için satış sonucu bulunamadı. Adı düzeltip tekrar dene.")
+    else:
+        liste = [r for r in sonuclar if r.get("extracted_price")]
+        liste.sort(key=lambda r: float(r["extracted_price"]))
+        liste = (liste or sonuclar)[:10]
+
+        if liste and liste[0].get("extracted_price"):
+            fiyatlar = [float(r["extracted_price"]) for r in liste
+                        if r.get("extracted_price")]
+            st.markdown(
+                '<div class="stats">'
+                f'<div class="stat best"><span>En düşük</span><b>{fiyat_goster(min(fiyatlar))}</b></div>'
+                f'<div class="stat"><span>Ortalama</span><b>{fiyat_goster(sum(fiyatlar)/len(fiyatlar))}</b></div>'
+                f'<div class="stat"><span>En yüksek</span><b>{fiyat_goster(max(fiyatlar))}</b></div>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"{len(fiyatlar)} mağazadaki fiyatlara göre, ucuzdan pahalıya.")
+
+        for i, item in enumerate(liste):
+            urun_karti(item, en_ucuz=(i == 0 and bool(item.get("extracted_price"))))
 
 st.markdown(
-    "<br><hr><center><p style='color:gray; font-size:12px;'>"
-    "Görselden Fiyat Karşılaştırma Asistanı 🚀</p></center>", 
-    unsafe_allow_html=True
+    "<p style='text-align:center;color:#66726D;font-size:.8rem;margin-top:2rem'>"
+    "Görselden fiyat karşılaştırma asistanı</p>",
+    unsafe_allow_html=True,
 )
